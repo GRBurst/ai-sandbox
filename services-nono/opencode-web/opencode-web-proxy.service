@@ -1,0 +1,14 @@
+[Install]
+WantedBy=default.target
+
+[Service]
+ExecReload=@CADDY@/bin/caddy reload --config @XDG_CONFIG_HOME@/agent-web/opencode-web/Caddyfile --adapter caddyfile --force
+ExecStart=@CADDY@/bin/caddy run --config @XDG_CONFIG_HOME@/agent-web/opencode-web/Caddyfile --adapter caddyfile
+Restart=always
+RestartSec=5
+Type=simple
+
+[Unit]
+After=opencode-web.service
+Description=Compressing loopback proxy for opencode-web
+PartOf=opencode-web.service

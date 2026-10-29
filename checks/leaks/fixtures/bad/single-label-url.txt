@@ -1,0 +1,2 @@
+# expect: :1:[single-label-url] http://buildbox
+url = "http://buildbox:8080/health";

@@ -1,0 +1,2 @@
+# Reviewed exceptions, one exact hit per line (see scan.sh). Entries are
+# `path:line:[rule] match`; one that no longer hits is stale and fails the scan.

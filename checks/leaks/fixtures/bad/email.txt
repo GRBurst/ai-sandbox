@@ -1,0 +1,2 @@
+# expect: :1:[email] someone@corp.test
+contact = "someone@corp.test";

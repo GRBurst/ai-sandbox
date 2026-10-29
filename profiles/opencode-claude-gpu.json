@@ -1,0 +1,42 @@
+{
+  "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
+  "allow_gpu": true,
+  "environment": {
+    "deny_vars": [
+      "WAYLAND_DISPLAY"
+    ],
+    "set_vars": {
+      "JITI_FS_CACHE": "$XDG_CACHE_HOME/opencode/jiti",
+      "NODE_COMPILE_CACHE": "$XDG_CACHE_HOME/opencode/node-compile-cache"
+    }
+  },
+  "extends": [
+    "nolabs-ai/opencode"
+  ],
+  "filesystem": {
+    "allow": [
+      "$TMPDIR",
+      "$XDG_CACHE_HOME/opencode",
+      "/dev/shm"
+    ],
+    "allow_file": [
+      "$HOME/.claude/.credentials.json"
+    ],
+    "deny": [],
+    "read": [
+      "$HOME/.agents/skills",
+      "/run/udev"
+    ],
+    "read_file": [
+      "$HOME/.Xauthority"
+    ]
+  },
+  "groups": {
+    "exclude": [
+      "user_caches_linux"
+    ]
+  },
+  "meta": {
+    "name": "opencode-claude-gpu"
+  }
+}

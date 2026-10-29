@@ -1,0 +1,2 @@
+        "url": "file:///home/alice/projects/nix/ai-sandbox"
+        "url": "git+file:///home/alice/projects/nix/pi-setup?ref=main"

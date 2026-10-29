@@ -1,0 +1,2 @@
+email = "tester@example.invalid";
+maintainer = "tester@example.com";

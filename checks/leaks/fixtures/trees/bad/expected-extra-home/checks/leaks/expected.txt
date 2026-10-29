@@ -1,0 +1,1 @@
+skills/a/SKILL.md:1:[home-path] /home/alice

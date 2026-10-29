@@ -1,0 +1,19 @@
+name: check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    # CI runs once the repository is public (no Actions minutes while it is
+    # private); delete this guard to run it earlier.
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    steps:
+      # Current majors, checked 2026-09-25: actions/checkout v7 (v7.0.1),
+      # cachix/install-nix-action v31 (v31.11.1).
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      # Ubuntu 24.04 runners restrict unprivileged user namespaces, which
+      # bwrap needs (checks ai-sandbox-run and run-portable).
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: nix flake check --keep-going -L

@@ -1,0 +1,34 @@
+{
+  "agy": {
+    "aliases": "agy.sh",
+    "profile": "agy-local",
+    "variants": {}
+  },
+  "claude": {
+    "aliases": "claude.sh",
+    "profile": "claude-local",
+    "variants": {
+      "claude_gpu": {
+        "aliases": "claude-gpu.sh",
+        "gpu": true,
+        "profile": "claude-local-gpu"
+      }
+    }
+  },
+  "opencode": {
+    "aliases": "opencode.sh",
+    "profile": "opencode-claude",
+    "variants": {
+      "opencode_gpu": {
+        "aliases": "opencode-gpu.sh",
+        "gpu": true,
+        "profile": "opencode-claude-gpu"
+      }
+    }
+  },
+  "pi": {
+    "aliases": "pi.sh",
+    "profile": "pi-claude",
+    "variants": {}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "opencode-web": {
+    "caddyfile": true,
+    "commands": [
+      "opencode"
+    ],
+    "dataDirs": [],
+    "profile": "opencode-web",
+    "units": [
+      "opencode-web",
+      "opencode-web-proxy"
+    ],
+    "workdir": "@HOME@/projects"
+  }
+}

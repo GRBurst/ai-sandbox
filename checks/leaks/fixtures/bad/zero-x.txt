@@ -1,0 +1,2 @@
+# expect: :1:[hex-id] 0xDEADBEEF12
+id = 0xDEADBEEF12;

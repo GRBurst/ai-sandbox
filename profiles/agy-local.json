@@ -1,0 +1,37 @@
+{
+  "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
+  "environment": {
+    "deny_vars": [
+      "WAYLAND_DISPLAY",
+      "DISPLAY"
+    ],
+    "set_vars": {
+      "JITI_FS_CACHE": "$XDG_CACHE_HOME/agy/jiti",
+      "NODE_COMPILE_CACHE": "$XDG_CACHE_HOME/agy/node-compile-cache"
+    }
+  },
+  "extends": [
+    "nolabs-ai/antigravity"
+  ],
+  "filesystem": {
+    "allow": [
+      "$TMPDIR",
+      "$XDG_CACHE_HOME/agy"
+    ],
+    "allow_file": [],
+    "deny": [],
+    "read": [
+      "$HOME/.agents/skills"
+    ]
+  },
+  "groups": {
+    "exclude": [],
+    "include": [
+      "nix_runtime",
+      "git_config"
+    ]
+  },
+  "meta": {
+    "name": "agy-local"
+  }
+}

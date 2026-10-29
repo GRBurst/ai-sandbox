@@ -1,0 +1,2 @@
+# expect: /home/fixture-user
+cd /home/fixture-user/projects

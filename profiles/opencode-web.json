@@ -1,0 +1,43 @@
+{
+  "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
+  "environment": {
+    "deny_vars": [
+      "WAYLAND_DISPLAY",
+      "DISPLAY"
+    ],
+    "set_vars": {
+      "JITI_FS_CACHE": "$XDG_CACHE_HOME/opencode-web/jiti",
+      "NODE_COMPILE_CACHE": "$XDG_CACHE_HOME/opencode-web/node-compile-cache"
+    }
+  },
+  "extends": [
+    "nolabs-ai/opencode"
+  ],
+  "filesystem": {
+    "allow": [
+      "$HOME/projects",
+      "$TMPDIR",
+      "$XDG_CACHE_HOME/opencode-web"
+    ],
+    "allow_file": [
+      "$HOME/.claude/.credentials.json"
+    ],
+    "deny": [],
+    "read": [
+      "$HOME/.agents/skills"
+    ]
+  },
+  "groups": {
+    "exclude": [
+      "user_caches_linux"
+    ]
+  },
+  "meta": {
+    "name": "opencode-web"
+  },
+  "network": {
+    "listen_port": [
+      15435
+    ]
+  }
+}

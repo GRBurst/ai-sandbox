@@ -1,0 +1,4 @@
+{"layers": ["session", "docker", "system", "pid", "tmp", "git", "userns"],
+ "runtimeRoot": "/run/user",
+ "sockets": {"docker": ["/run/docker.sock", "/run/podman/podman.sock"],
+             "system": ["/run/dbus/system_bus_socket", "/run/avahi-daemon/socket"]}}

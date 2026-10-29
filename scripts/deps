@@ -1,0 +1,14 @@
+# Tools the installer and the installed wrapper need without Nix.
+# <binary> <package> <when>; when: always | isolation | services | optional
+# The README "Without Nix" table lists the same rows (check readme-deps).
+bash bash always
+jq jq always
+nono nono always
+install coreutils always
+sha256sum coreutils always
+bwrap bubblewrap isolation
+socat socat isolation
+git git isolation
+setsid util-linux isolation
+caddy caddy services
+xdg-open xdg-utils optional

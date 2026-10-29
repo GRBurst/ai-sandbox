@@ -1,0 +1,17 @@
+[Install]
+WantedBy=default.target
+
+[Service]
+Environment=PATH=@SERVICE_PATH@
+Environment=TMPDIR=%t/agent-web/opencode-web
+ExecStart=@NONO@/bin/nono run --profile opencode-web --workdir @HOME@/projects --strict-broker-path --silent -- opencode serve --port 15435 --hostname 127.0.0.1
+Restart=always
+RestartSec=5
+RuntimeDirectory=agent-web/opencode-web
+RuntimeDirectoryMode=0700
+Type=simple
+WorkingDirectory=@HOME@/projects
+
+[Unit]
+Description=opencode web UI server
+Wants=opencode-web-proxy.service

@@ -1,0 +1,3 @@
+# RFC 2606 reserves the .example top-level domain
+reply = "tester@mail.example";
+url = "https://claude.ai@evil.example/";

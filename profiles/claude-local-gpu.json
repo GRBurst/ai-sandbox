@@ -1,0 +1,39 @@
+{
+  "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
+  "allow_gpu": true,
+  "environment": {
+    "deny_vars": [
+      "WAYLAND_DISPLAY"
+    ],
+    "set_vars": {
+      "JITI_FS_CACHE": "$XDG_CACHE_HOME/claude/jiti",
+      "NODE_COMPILE_CACHE": "$XDG_CACHE_HOME/claude/node-compile-cache"
+    }
+  },
+  "extends": [
+    "nolabs-ai/claude"
+  ],
+  "filesystem": {
+    "allow": [
+      "$TMPDIR",
+      "$XDG_CACHE_HOME/claude",
+      "/dev/shm"
+    ],
+    "allow_file": [],
+    "deny": [],
+    "read": [
+      "/run/udev"
+    ],
+    "read_file": [
+      "$HOME/.Xauthority"
+    ]
+  },
+  "groups": {
+    "exclude": [
+      "vscode_linux"
+    ]
+  },
+  "meta": {
+    "name": "claude-local-gpu"
+  }
+}

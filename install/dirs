@@ -1,0 +1,5 @@
+@XDG_CACHE_HOME@/agy
+@XDG_CACHE_HOME@/claude
+@XDG_CACHE_HOME@/opencode
+@XDG_CACHE_HOME@/opencode-web
+@XDG_CACHE_HOME@/pi

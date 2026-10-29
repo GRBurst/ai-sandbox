@@ -1,0 +1,14 @@
+{
+  "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
+  "extends": [
+    "pi-claude"
+  ],
+  "filesystem": {
+    "allow": [
+      "$HOME/src/notes"
+    ]
+  },
+  "meta": {
+    "name": "pi-claude-notes"
+  }
+}

@@ -1,0 +1,2 @@
+# expect: :1:[key-id] --local-user=DEADBEEFDEADBEEF
+gpg --local-user=DEADBEEFDEADBEEF --sign file
