@@ -181,6 +181,8 @@ in {
 
   home = import ./home.nix {inherit lib pkgs helpers;};
 
+  inherit (import ./packs.nix {inherit pkgs lib helpers;}) packs-pins packs-activation;
+
   services = import ./services.nix {inherit lib pkgs helpers;};
 
   variants = import ./variants.nix {inherit lib helpers;};

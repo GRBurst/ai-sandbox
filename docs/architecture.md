@@ -93,7 +93,7 @@ exactly the packs the shipped profiles extend.
 | `install/{harnesses.json,services.json,dirs}` | the fixture's harnesses, services and activation dirs | `render-install` |
 | `shell/variant.sh` | hand-written; the one re-implementation of the alias builder | `variant-sh` (byte for byte against the Nix strings, bash, zsh and dash) |
 | `shell/aliases.sh`, `scripts/install.sh`, `scripts/deps` | hand-written | `install-sh`, `readme-deps`, `shellcheck` |
-| `scripts/packs` | hand-written: the version of each registry pack the installer pulls | `extends-shape`, `install-sh` |
+| `scripts/packs` | hand-written: the version of each registry pack; read by the module and the installer | `extends-shape`, `install-sh`, `packs-pins`, `packs-activation` |
 | `packages/ai-sandbox-run/portable-preamble.sh` | hand-written template | `run-portable` (the wrapper suite against the installed wrapper), `preamble-vars` inside it |
 | `examples/existing-flake/` | hand-written | `existing-flake-example` |
 | `examples/without-nix/*.json` | hand-written | `extends-shape` |

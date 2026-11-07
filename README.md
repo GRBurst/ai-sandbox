@@ -20,7 +20,7 @@ from them (`profiles/`, `shell/`, `sysctl/`, `services/`, `services-nono/`,
 - `packages.<system>.ai-sandbox-run`: the isolation wrapper (bubblewrap around nono).
 - `checks.<system>`: `formatting`, `leaks`, `readme-options`, `readme-sections`, `ai-sandbox-run`,
   `shellcheck`, `actionlint`, `run-portable`, `install-sh`, `readme-deps`, `doc-refs`,
-  `boundary`, `nixos-output`, `render-profiles`, `render-aliases`, `render-units`, `render-sysctl`, `render-install`, `variant-sh`, `extends-shape`, `existing-flake-example`;
+  `boundary`, `nixos-output`, `render-profiles`, `render-aliases`, `render-units`, `render-sysctl`, `render-install`, `variant-sh`, `extends-shape`, `packs-pins`, `packs-activation`, `existing-flake-example`;
   the module checks (`checks/module`) `fixtures`, `isolation`, `profiles`, `aliases`,
   `home`, `services`, `variants`, `harnesses`, `profile-unit`, `nixos`.
 - `apps.<system>.render`: `nix run .#render` from the checkout writes the generated files for use
@@ -107,7 +107,10 @@ What `enable = true` gives you, with every default:
   pinned in `scripts/packs` of this repository (raw:
   `https://raw.githubusercontent.com/GRBurst/ai-sandbox/<ref>/scripts/packs`),
   for example `nono pull nolabs-ai/claude@0.1.4`. Without the pack an alias
-  fails with "base profile 'nolabs-ai/claude' not found".
+  fails with "base profile 'nolabs-ai/claude' not found". The Home Manager
+  activation only warns when a pack is missing or at another version, or when
+  nono's pack list cannot be read, and names the same `nono pull` line; it
+  never pulls.
 
 A project-directory variant is a harness profile with one more grant, with its
 own aliases:

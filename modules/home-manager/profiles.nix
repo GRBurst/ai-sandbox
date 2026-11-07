@@ -127,6 +127,9 @@
   managedCommands =
     lib.filter (c: allSandboxProfiles ? ${c}) (lib.attrNames sandboxSpecs);
 
+  # The registry packs of the enabled harnesses and services, each once; the activation checks them.
+  requiredPacks = lib.unique (map (c: sandboxSpecs.${c}.pack) managedCommands);
+
   baseProfileName = command: allSandboxProfiles.${command};
 
   # The TMPDIR grant, the cache grant and the cache-var pins are added here
@@ -217,6 +220,12 @@ in {
       readOnly = true;
       description = "The commands that get a profile file and a private cache dir (harnesses and services).";
     };
+    requiredPacks = lib.mkOption {
+      type = with lib.types; listOf str;
+      internal = true;
+      readOnly = true;
+      description = "The registry pack of every managed command (harnesses and services), each once.";
+    };
     profileNames = lib.mkOption {
       type = with lib.types; listOf str;
       internal = true;
@@ -228,7 +237,7 @@ in {
   config = lib.mkMerge [
     {
       programs.aiSandbox.internal = {
-        inherit managedCommands;
+        inherit managedCommands requiredPacks;
         profileNames = allProfileNames;
       };
     }

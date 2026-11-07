@@ -5,10 +5,12 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }: let
   scfg = config.programs.aiSandbox;
   homeDir = config.home.homeDirectory;
+  packPins = (import ./packs.nix {inherit lib;} (builtins.readFile ../../scripts/packs)).pins;
   editorEnabled = scfg.enable && scfg.editor.enable;
   isolationEnabled = scfg.enable && scfg.isolation.enable;
 
@@ -93,6 +95,56 @@ in {
         (lib.concatMapStringsSep "\n"
           (d: ''run install -d -m 0700 "${d}"'')
           scfg.internal.activationDirs);
+
+      # nono does not fetch a pack a profile names in `extends`, so a missing or other-version pack
+      # breaks that agent's runs until `nono pull` names it. This only names the line (offline:
+      # one `nono list`, no pull, never a failed activation); scripts/packs is the pin. A listing
+      # that cannot be read (nono missing, failing, hanging, other output) is one warning that
+      # names every line, not one "missing" per pack.
+      home.activation.aiSandboxPacks = let
+        q = lib.escapeShellArg;
+        refOf = p: let
+          pin = packPins.${p} or null;
+        in
+          if pin == null
+          then p
+          else "${p}@${pin}";
+        indent = s: "  " + builtins.replaceStrings ["\n"] ["\n  "] s;
+        # one pack of a readable listing: absent, or at another version than the pin
+        packCheck = p: let
+          pin = packPins.${p} or null;
+        in
+          lib.concatStringsSep "\n" ([
+              "_aiV=$(${pkgs.jq}/bin/jq -er --arg p ${q p} '.packages[$p].version // empty' <<<\"$_aiPacks\" 2>/dev/null) || _aiV="
+              "if [ -z \"$_aiV\" ]; then"
+              "  warnEcho ${q "ai-sandbox: nono lacks the pack ${p}; its sandboxed profiles fail until: nono pull ${refOf p}"}"
+            ]
+            ++ lib.optionals (pin != null) [
+              "elif [ \"$_aiV\" != ${q pin} ]; then"
+              "  warnEcho \"ai-sandbox: the nono pack ${p} is at \$_aiV, not at ${pin} as scripts/packs pins; left as it is\""
+            ]
+            ++ ["fi"]);
+        pulls = lib.concatMapStringsSep "; " (p: "nono pull ${refOf p}") scfg.internal.requiredPacks;
+      in
+        lib.hm.dag.entryAfter ["writeBoundary"] ''
+          _aiErr=$(${pkgs.coreutils}/bin/mktemp) || _aiErr=/dev/null
+          _aiRc=0
+          _aiPacks=$(${pkgs.coreutils}/bin/timeout 10 ${scfg.package}/bin/nono list --installed --json </dev/null 2>"$_aiErr") || _aiRc=$?
+          _aiWhy=
+          if [ "$_aiRc" = 124 ]; then
+            _aiWhy="nono list timed out"
+          elif [ "$_aiRc" != 0 ]; then
+            _aiWhy="nono list exited $_aiRc: $(head -n 1 "$_aiErr" 2>/dev/null)"
+          elif ! ${pkgs.jq}/bin/jq -e '(.packages // {}) | type == "object"' <<<"$_aiPacks" >/dev/null 2>&1; then
+            _aiWhy="nono list printed no pack list this module understands"
+          fi
+          [ "$_aiErr" = /dev/null ] || rm -f "$_aiErr"
+          if [ -n "$_aiWhy" ]; then
+            warnEcho "ai-sandbox: cannot read nono's pack list ($_aiWhy); check that the packs are there: "${q pulls}
+          else
+          ${lib.concatMapStringsSep "\n" (p: indent (packCheck p)) scfg.internal.requiredPacks}
+          fi
+        '';
     })
   ];
 }

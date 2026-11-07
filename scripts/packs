@@ -2,7 +2,8 @@
 # fetch a pack a profile names in `extends` (NONO_AUTO_MIGRATE covers bare
 # profile names only), so the packs must be in nono's pack store before the
 # first run: scripts/install.sh pulls a missing one at this version
-# (`nono pull <pack>@<version>`); with Nix, pull them once yourself.
+# (`nono pull <pack>@<version>`); with Nix, pull them once yourself (the Home Manager
+# activation only warns about a missing or other-version pack, it never pulls).
 # The check extends-shape keeps this list and the packs of profiles/ equal.
 # <pack> <version>
 nolabs-ai/antigravity 0.3.4
