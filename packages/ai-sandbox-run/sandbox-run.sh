@@ -1,4 +1,4 @@
-# ai-sandbox-run [--x11] [--nono-alias NAME] [--open-urls-profile PROFILE] -- COMMAND [ARG...]
+# ai-sandbox-run [--x11] [--nono-alias NAME] [--open-urls-profile PROFILE] [--git-dir DIR]... -- COMMAND [ARG...]
 # Spec: docs/specs/2026-09-26-sandbox-namespace-isolation-design.md.
 # Variables above this line are injected by sandbox-run.nix.
 
@@ -24,6 +24,7 @@ under() {
 x11=0
 nono_alias=
 urls_profile=
+git_dirs=()
 while [ $# -gt 0 ]; do
   case $1 in
     --x11)
@@ -40,6 +41,11 @@ while [ $# -gt 0 ]; do
       urls_profile=$2
       shift 2
       ;;
+    --git-dir)
+      [ $# -ge 2 ] || die 2 "--git-dir needs a value"
+      git_dirs+=("$2")
+      shift 2
+      ;;
     --)
       shift
       break
@@ -47,7 +53,7 @@ while [ $# -gt 0 ]; do
     *) die 2 "unknown option: $1" ;;
   esac
 done
-[ $# -gt 0 ] || die 2 "usage: ai-sandbox-run [--x11] [--nono-alias NAME] [--open-urls-profile PROFILE] -- COMMAND [ARG...]"
+[ $# -gt 0 ] || die 2 "usage: ai-sandbox-run [--x11] [--nono-alias NAME] [--open-urls-profile PROFILE] [--git-dir DIR]... -- COMMAND [ARG...]"
 
 # --- relax (R8) --------------------------------------------------------------
 relaxed=()
@@ -136,9 +142,18 @@ cfg_get() { (cd / && "$git" config --file "$1" --no-includes -z "${@:2}"); }
 
 git_ro() {
   root=$("$coreutils/pwd" -P)
-  local gd=$root/.git p f v rec queue=() seen=()
+  local gd=$root/.git
   [ -d "$gd" ] || return 0
-  for p in "$gd/hooks" "$gd/config" "$gd/config.worktree"; do
+  hooks_root=$root
+  config_ro "$gd" "$gd/hooks" "$gd/config" "$gd/config.worktree"
+}
+# $1: the git dir; the rest: what to bind read-only if it exists. Then its
+# config, config.worktree and their includes, with `root` (set by the caller)
+# as the tree and `hooks_root` as the base of a relative core.hooksPath.
+config_ro() {
+  local gd=$1 p f v rec queue=() seen=()
+  shift
+  for p in "$@"; do
     if [ -e "$p" ]; then args+=(--ro-bind "$p" "$p"); fi
   done
   [ -f "$gd/config" ] || return 0
@@ -146,6 +161,7 @@ git_ro() {
   # agent-writable include could set core.fsmonitor or core.hooksPath for the
   # human's next git command. Out-of-tree includes are the user's own files.
   queue=("$gd/config")
+  if [ -f "$gd/config.worktree" ]; then queue+=("$gd/config.worktree"); fi
   while [ ${#queue[@]} -gt 0 ] && [ ${#seen[@]} -lt 10 ]; do
     f=${queue[0]}
     queue=("${queue[@]:1}")
@@ -153,7 +169,7 @@ git_ro() {
     seen+=("$f")
     # core.hooksPath is relative to the worktree root, not to the file.
     while IFS= read -r -d '' v; do
-      ro_in_tree "$(config_path "$v" "$root")" || true
+      ro_in_tree "$(config_path "$v" "$hooks_root")" || true
     done < <(cfg_get "$f" --get-all core.hooksPath || true)
     # -z: "key\nvalue\0"; includeIf conditions may contain spaces.
     while IFS= read -r -d '' rec; do
@@ -162,7 +178,35 @@ git_ro() {
     done < <(cfg_get "$f" --get-regexp '^include(if\..*)?\.path$' || true)
   done
 }
-if on git; then git_ro; fi
+# A git dir the variant names besides the project's (`--git-dir`, e.g. a bare
+# repository the agent may commit to): its objects and refs stay writable, its
+# hooks, config and info read-only, the same as the project's .git. The tree
+# for in-tree includes and hooksPath is the git dir itself; a relative hooksPath
+# resolves against core.worktree when set (a bare repository of the home, say),
+# else against the git dir. Its linked worktrees' config.worktree, commondir and
+# gitdir are read-only too: git reads the first two for a worktree's config.
+extra_git_ro() {
+  local d=$1 gd f v
+  case $d in /*) ;; *) die 1 "--git-dir must be an absolute path (got '$d')" ;; esac
+  gd=$("$coreutils/realpath" -e -- "$d" 2>/dev/null) || die 1 "--git-dir does not exist: $d"
+  [ -f "$gd/config" ] || die 1 "--git-dir is not a git directory (no config file): $d"
+  # git reads the config and hooks of the dir `commondir` names instead, and a
+  # missing hooks/ could be created: both would sidestep the binds below.
+  [ ! -e "$gd/commondir" ] || die 1 "--git-dir has a commondir file (a linked worktree's git dir); name the repository it points to instead: $d"
+  [ -d "$gd/hooks" ] || die 1 "--git-dir has no hooks directory; create it (mkdir '$gd/hooks') so it can be held read-only: $d"
+  root=$gd hooks_root=$gd
+  for f in "$gd/config" "$gd/config.worktree"; do
+    if [ -f "$f" ] && IFS= read -r -d '' v < <(cfg_get "$f" --get core.worktree || true); then
+      hooks_root=$(config_path "$v" "$gd")
+    fi
+  done
+  config_ro "$gd" "$gd/hooks" "$gd/config" "$gd/config.worktree" "$gd/info" \
+    "$gd"/worktrees/*/config.worktree "$gd"/worktrees/*/commondir "$gd"/worktrees/*/gitdir
+}
+if on git; then
+  for d in "${git_dirs[@]}"; do extra_git_ro "$d"; done
+  git_ro
+fi
 
 # --- 4b. environment naming hidden paths ---------------------------------------
 # SSH_AUTH_SOCK, DBUS_SESSION_BUS_ADDRESS, SWAYSOCK, NOTIFY_SOCKET, ... would

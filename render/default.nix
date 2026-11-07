@@ -179,9 +179,11 @@
   # What the installer reads (install/): harness -> profile, alias file and variants (`gpu` marks
   # the ones `GPU=0` leaves out); service -> profile, units, whether it has a Caddyfile, data
   # dirs, working tree and the commands its units run (the installer looks them up on the
-  # units' PATH); the directories activation creates (one per line, placeholders for the
-  # sentinels).
+  # units' PATH); the ai-sandbox bases, each with the registry pack it is made from (the
+  # installer installs a base with the profiles extending it and pulls its pack); the
+  # directories activation creates (one per line, placeholders for the sentinels).
   installJson = {
+    "bases.json" = a.internal.baseProfiles;
     "harnesses.json" =
       lib.mapAttrs (h: profile: {
         inherit profile;

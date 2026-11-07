@@ -10,12 +10,14 @@
   inherit
     (helpers)
     aiProfile
-    aiPack
+    aiBase
+    aiBasePack
     aiAllProfileNames
     aiBaseProfileOf
     aiEmittedProfiles
     aiUnixSocketGrants
     aiGeneratedAliases
+    aiTwinnedAliases
     aiExpectedNonoAliases
     aiExpectedAlias
     aiExpectedGpuAlias
@@ -36,11 +38,15 @@ in
         # (E) THE assertion. nono's `extends` is monotone-additive and the profile
         # schema has no mechanism to remove an inherited filesystem path, so a
         # second base is permanent. Everything below is a corollary of this.
+        # The base is the profile's pack or, for a re-based pack, the ai-sandbox
+        # base of it, which itself extends `default` only (as the pack does).
         condition =
           lib.all
-          (n: (aiProfile home n).extends == [aiPack.${aiBaseProfileOf n}])
-          aiAllProfileNames;
-        message = "each nono profile must extend exactly its own pack (isolation invariant E)";
+          (n: (aiProfile home n).extends == [aiBase.${aiBaseProfileOf n}])
+          aiAllProfileNames
+          && lib.all (b: ((aiEmittedProfiles home).${b}.extends or null) == ["default"])
+          (lib.filter (b: aiBasePack ? ${b}) (map (n: aiBase.${aiBaseProfileOf n}) aiAllProfileNames));
+        message = "each nono profile must extend exactly its own base: its pack, or the ai-sandbox base of its pack (isolation invariant E)";
       }
       {
         # open_urls is replace-on-override, so a hand-written block is the
@@ -52,9 +58,11 @@ in
       {
         # Mediation off: nono 0.78.0 denies granted sockets under mediation
         # (nolabs-ai/nono#1970, #1420), so by default no profile may
-        # carry any part of it.
+        # carry any part of it. The ai-sandbox bases are exempt: their socket
+        # grants are the pack's own, byte for byte (the `bases` check), which the
+        # profiles inherited from the pack before.
         condition = (h: let
-          ps = lib.attrValues (aiEmittedProfiles h);
+          ps = lib.attrValues (removeAttrs (aiEmittedProfiles h) (lib.attrNames aiBasePack));
         in
           ps != [] && lib.all (p: !(p ? linux) && aiUnixSocketGrants p == {}) ps)
         home;
@@ -86,21 +94,21 @@ in
         message = "ai-alias-wrapped: every generated alias must exec ai-sandbox-run before nono";
       }
       {
-        # Each generated alias has a twin `<alias>_nono` that is
-        # exactly its nono-only string -- the alias as it was before the
-        # isolation -- and never reaches the wrapper. Set equality on the
+        # Each generated alias but a variant with gitDirs (aiTwinnedAliases) has a
+        # twin `<alias>_nono` that is exactly its nono-only string -- the alias as
+        # it was before the isolation -- and never reaches the wrapper. Set equality on the
         # `_nono` keys, so a missing twin and a stray one both fail.
         condition = (h: let
           a = h.home.shellAliases;
-          want = map (n: "${n}_nono") (aiGeneratedAliases h);
+          want = map (n: "${n}_nono") (aiTwinnedAliases h);
           got = lib.filter (lib.hasSuffix "_nono") (lib.attrNames a);
         in
           lib.sort lib.lessThan got
           == lib.sort lib.lessThan want
-          && lib.all (n: a."${n}_nono" == (aiExpectedNonoAliases h).${n}) (aiGeneratedAliases h)
+          && lib.all (n: a."${n}_nono" == (aiExpectedNonoAliases h).${n}) (aiTwinnedAliases h)
           && lib.all (t: !(lib.hasInfix "ai-sandbox-run" t)) (aiNonoTwinsOf h))
         home;
-        message = "ai-alias-nono-twins: every generated alias needs <alias>_nono equal to its nono-only string";
+        message = "ai-alias-nono-twins: every generated alias (but a variant with gitDirs) needs <alias>_nono equal to its nono-only string";
       }
       {
         # Without this the nolabs-ai/opencode pack resolves `$TMPDIR` to /tmp and

@@ -77,8 +77,8 @@ in {
       type = lib.types.attrsOf (lib.types.submodule {options = grantFields;});
       default = {};
       description = ''
-        Grants and variables added to EVERY profile (harness, GPU twin, service) that extends
-        the named registry pack, so a pack-level need is stated once.
+        Grants and variables added to EVERY profile (harness, GPU twin, service) of the named
+        registry pack (its `pack`), so a pack-level need is stated once.
       '';
     };
 

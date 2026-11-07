@@ -5,7 +5,7 @@
   pkgs,
   helpers,
 }: let
-  inherit (helpers) mkAssertionCheck aiFixtureWith aiEmittedProfiles aiGpuVariants;
+  inherit (helpers) mkAssertionCheck aiFixtureWith aiEmittedProfiles aiGpuVariants aiBasePack;
   harnesses = ["agy" "claude" "opencode" "pi"];
   base = (aiFixtureWith {}).config;
   baseProfiles = aiEmittedProfiles base;
@@ -13,13 +13,16 @@
   profileOf = h: x: h.programs.aiSandbox.harnessProfiles.${x};
   off = x: (aiFixtureWith {programs.aiSandbox.harnesses.${x}.enable = false;}).config;
 
-  # What disabling harness x must remove: its profile and GPU twin, its alias, its
-  # `_nono` twin, and the aliases of the variants of x with their twins.
+  # What disabling harness x must remove: its profile and GPU twin, the ai-sandbox base of its
+  # pack (no other default profile has that pack), its alias, its `_nono` twin, and the
+  # aliases of the variants of x with their twins.
   gonePrefix = x: [x] ++ lib.attrNames (lib.filterAttrs (_: c: c == x) aiGpuVariants);
   goneProfiles = x: let
     p = profileOf base x;
   in
-    [p] ++ lib.optional (lib.any (c: c == x) (lib.attrValues aiGpuVariants)) "${p}-gpu";
+    [p]
+    ++ lib.optional (lib.any (c: c == x) (lib.attrValues aiGpuVariants)) "${p}-gpu"
+    ++ lib.attrNames (lib.filterAttrs (_: pack: pack == base.programs.aiSandbox.harnesses.${x}.pack) aiBasePack);
   goneAliases = x: lib.concatMap (a: [a "${a}_nono"]) (gonePrefix x);
 
   switchOff = x: let
@@ -30,8 +33,10 @@
     && h.home.shellAliases == removeAttrs baseAliases (goneAliases x);
 
   # A delta on a test pack, one entry in every grant field, reaches every emitted profile
-  # extending that pack (harness and GPU twin alike) and no other.
+  # of that pack (harness and GPU twin alike) and no other; the pack is re-based, so its
+  # profiles extend its ai-sandbox base, which the delta must not reach either.
   testPack = "nolabs-ai/claude";
+  testBase = lib.findFirst (b: aiBasePack.${b} == testPack) testPack (lib.attrNames aiBasePack);
   packDelta = {
     allow = ["$HOME/.pack-allow"];
     allowFile = ["$HOME/.pack-delta"];
@@ -50,7 +55,7 @@
       programs.aiSandbox.unixMediation.enable = true;
       programs.aiSandbox.packDefaults.${testPack} = packDelta;
     }).config;
-  extendsPack = p: p.extends == [testPack];
+  extendsPack = p: p.extends == [testBase];
   hasDelta = p: let
     fs = p.filesystem;
   in
@@ -67,19 +72,22 @@
     ["$HOME/.pack-allow" "$HOME/.pack-delta" "$HOME/.pack-read" "$HOME/.pack-read-file" "$HOME/.pack-deny" "$HOME/.pack-sock"]
     || p.environment.set_vars ? PACK_DELTA;
 
-  # profileDefaults: grants added to every profile of every pack (harness, GPU twin, service).
+  # profileDefaults: grants added to every profile of every pack (harness, GPU twin, service);
+  # not to an ai-sandbox base, which stays the pack's profile (its profiles carry them).
   defaults =
-    aiEmittedProfiles
-    (aiFixtureWith {
-      programs.aiSandbox.profileDefaults = {
-        allow = ["$HOME/.all-allow"];
-        read = ["$HOME/.all-read"];
-        readFile = ["$HOME/.all-read-file"];
-        deny = ["$HOME/.all-deny"];
-      };
-      programs.aiSandbox.services.opencode-web.enable = true;
-    })
-    .config;
+    removeAttrs
+    (aiEmittedProfiles
+      (aiFixtureWith {
+        programs.aiSandbox.profileDefaults = {
+          allow = ["$HOME/.all-allow"];
+          read = ["$HOME/.all-read"];
+          readFile = ["$HOME/.all-read-file"];
+          deny = ["$HOME/.all-deny"];
+        };
+        programs.aiSandbox.services.opencode-web.enable = true;
+      })
+      .config)
+    (lib.attrNames aiBasePack);
 
   # `harnesses.<n>.package` is installed iff it is non-null and the harness is enabled.
   stub = pkgs.writeShellScriptBin "opencode" "exit 0";

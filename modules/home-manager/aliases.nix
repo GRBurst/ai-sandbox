@@ -97,17 +97,20 @@
   # `alias` names the nono-only twin for the wrapper's fail-closed hint (null
   # for pi-claude-login, which has none); `x11` binds the host's X11 socket
   # dir into the private /tmp (display GPU twins). `--open-urls-profile` is
-  # the profile whose open_urls the URL relay enforces.
+  # the profile whose open_urls the URL relay enforces. `gitDirs` are the variant's git dirs
+  # the wrapper holds read-only besides the project's (double-quoted: `$HOME` expands).
   mkAlias = {
     alias ? null,
     x11 ? false,
+    gitDirs ? [],
     ...
   } @ a: let
-    base = builtins.removeAttrs a ["alias" "x11"];
+    base = builtins.removeAttrs a ["alias" "x11" "gitDirs"];
     wrapper =
       ["ai-sandbox-run"]
       ++ lib.optional x11 "--x11"
       ++ lib.optionals (alias != null) ["--nono-alias" "${alias}_nono"]
+      ++ lib.concatMap (d: ["--git-dir" "\"${d}\""]) gitDirs
       ++ ["--open-urls-profile" a.profile "--"];
   in
     if isolationEnabled
@@ -127,18 +130,24 @@
   # `x11` follows the variant: only one granted the X11 cookie gets the host's X11 socket dir
   # inside its private /tmp. TMPDIR is keyed on the harness's command, so `claude_gpu` shares
   # claude's scratch dir; the isolation that matters (XDG_RUNTIME_DIR) is keyed on the profile.
+  # A variant with gitDirs has no `_nono` twin to name in the fail-closed hint (see below).
   variantAliases = lib.mapAttrs (alias: e:
     mkAlias {
-      inherit alias;
+      alias =
+        if e.spec.gitDirs == []
+        then alias
+        else null;
       inherit (e) command profile;
       extraArgs = e.spec.nonoArgs;
       x11 = e.spec.x11;
+      gitDirs = e.spec.gitDirs;
     })
   scfg.internal.variants;
 
   # `<alias>_nono`: every generated alias through nono only, i.e. the alias as
   # it was before the namespace isolation. Emitted only while
-  # the isolation is on; with it off the alias itself is this string.
+  # the isolation is on; with it off the alias itself is this string. None for a variant
+  # with gitDirs: nono alone would leave those git dirs' hooks and config writable.
   nonoAliases =
     lib.mapAttrs' (command: profile:
       lib.nameValuePair "${command}_nono" (mkNonoAlias {inherit command profile;}))
@@ -148,7 +157,7 @@
         inherit (e) command profile;
         extraArgs = e.spec.nonoArgs;
       }))
-    scfg.internal.variants;
+    (lib.filterAttrs (_: e: e.spec.gitDirs == []) scfg.internal.variants);
 
   bogusGpu = lib.filterAttrs (_: c: !(scfg.harnesses ? ${c})) scfg.gpu.variants;
   unknownVariants = lib.attrNames (lib.filterAttrs (a: v: !(scfg.harnesses ? ${v.harness}) && !(bogusGpu ? ${a})) scfg.variants);
@@ -164,14 +173,18 @@ in {
     readOnly = true;
     description = ''
       Renders a sandboxed command line: `{command, profile, tmpLeaf ? command, extraArgs ? [],
-      alias ? null, x11 ? false}` to the string an alias holds (through the namespace isolation
+      alias ? null, x11 ? false, gitDirs ? []}` to the string an alias holds (through the namespace isolation
       while it is on, nono only otherwise). For consumers such as a login helper that runs a
-      harness in another harness's profile.
+      harness in another harness's profile. `gitDirs` takes effect through the isolation only:
+      with it or its `git` layer off, a call that passes them throws.
     '';
   };
 
   config = {
-    programs.aiSandbox.render.command = mkAlias;
+    programs.aiSandbox.render.command = a:
+      if (a.gitDirs or []) != [] && !(isolationEnabled && lib.elem "git" scfg.isolation.layers)
+      then throw "ai-sandbox: render.command got gitDirs, which only the namespace isolation's git layer holds read-only; turn on isolation.enable with \"git\" in isolation.layers, or drop gitDirs."
+      else mkAlias a;
 
     assertions = [
       {

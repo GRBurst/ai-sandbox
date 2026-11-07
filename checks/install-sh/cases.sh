@@ -436,13 +436,22 @@ rm -f "${victims[@]}"
 # ---- profiles and layers ---------------------------------------------------------
 # The profiles of the selected harnesses (install/harnesses.json: a harness's
 # profile and its variants', the GPU ones only with GPU=1) are copied to
-# $XDG_CONFIG_HOME/nono/profiles; then the files of every layer registered with
-# --layer NAME=DIR, in registration order, later wins.
-want_profiles() { # want_profiles HARNESSES GPU: the names install/harnesses.json selects
+# $XDG_CONFIG_HOME/nono/profiles, with the shipped base (install/bases.json) each
+# of them extends; then the files of every layer registered with --layer NAME=DIR,
+# in registration order, later wins.
+want_profiles() { # want_profiles HARNESSES GPU: the names install/harnesses.json selects and their bases
+  local names n
   # shellcheck disable=SC2016 # jq variables, not shell ones
-  "$JQ_BIN/jq" -r --arg hs "$1" --argjson gpu "$2" '. as $all | $hs | split(",")[] | $all[.]
+  names=$("$JQ_BIN/jq" -r --arg hs "$1" --argjson gpu "$2" '. as $all | $hs | split(",")[] | $all[.]
     | .profile, (.variants[] | select(.gpu == false or $gpu == 1) | .profile)' \
-    "$REPO/install/harnesses.json" | sort -u
+    "$REPO/install/harnesses.json")
+  {
+    printf '%s\n' "$names"
+    for n in $names; do
+      # shellcheck disable=SC2016 # jq variables, not shell ones
+      "$JQ_BIN/jq" -r --slurpfile b "$REPO/install/bases.json" '.extends[] | select($b[0][.] != null)' "$REPO/profiles/$n.json"
+    done
+  } | sort -u
 }
 have_profiles() { # have_profiles DIR: the profile names in DIR, sorted, one line
   find "$1" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sed 's/\.json$//' | sort | tr '\n' ' '
@@ -455,7 +464,7 @@ run_installer install
 expect_rc 0
 [ "$(have_profiles "$(pdir)")" = "$(want_profiles claude,opencode,pi,agy 1 | tr '\n' ' ')" ] ||
   fail "$c: installed $(have_profiles "$(pdir)"), want $(want_profiles claude,opencode,pi,agy 1 | tr '\n' ' ')"
-for n in agy-local claude-local claude-local-gpu opencode-claude opencode-claude-gpu pi-claude; do
+for n in agy-local ai-sandbox-claude claude-local claude-local-gpu opencode-claude opencode-claude-gpu pi-claude; do
   f=$(pdir)/$n.json
   [ -f "$f" ] && [ ! -L "$f" ] || fail "$c: $f is not a regular file"
   cmp -s "$REPO/profiles/$n.json" "$f" || fail "$c: $f is not a copy of profiles/$n.json"
@@ -468,19 +477,19 @@ new_case profiles-selected
 ENVV=("HARNESSES=claude,pi" GPU=0)
 run_installer install
 expect_rc 0
-[ "$(have_profiles "$(pdir)")" = "claude-local pi-claude " ] || fail "$c: installed $(have_profiles "$(pdir)")"
+[ "$(have_profiles "$(pdir)")" = "ai-sandbox-claude claude-local pi-claude " ] || fail "$c: installed $(have_profiles "$(pdir)")"
 [ "$(have_profiles "$(pdir)")" = "$(want_profiles claude,pi 0 | tr '\n' ' ')" ] || fail "$c: not the set of install/harnesses.json"
 
 new_case profiles-gpu
 ENVV=(HARNESSES=claude GPU=1)
 run_installer install
 expect_rc 0
-[ "$(have_profiles "$(pdir)")" = "claude-local claude-local-gpu " ] || fail "$c: installed $(have_profiles "$(pdir)")"
+[ "$(have_profiles "$(pdir)")" = "ai-sandbox-claude claude-local claude-local-gpu " ] || fail "$c: installed $(have_profiles "$(pdir)")"
 # a reinstall that selects less removes the profiles no longer selected
 ENVV=(HARNESSES=claude GPU=0)
 run_installer install
 expect_rc 0
-[ "$(have_profiles "$(pdir)")" = "claude-local " ] || fail "$c: GPU=0 left $(have_profiles "$(pdir)")"
+[ "$(have_profiles "$(pdir)")" = "ai-sandbox-claude claude-local " ] || fail "$c: GPU=0 left $(have_profiles "$(pdir)")"
 
 new_case profiles-config-home
 ENVV=(XDG_CONFIG_HOME="$H/cfg")
@@ -637,7 +646,7 @@ ENVV=(GPU=default ISOLATION=1)
 run_installer install
 expect_rc 0
 [ "$(cat "$(options_of)")" = "HARNESSES=claude"$'\n'"ISOLATION=1" ] || fail "$c: GPU=default, ISOLATION=1 recorded $(cat "$(options_of)")"
-[ "$(have_profiles "$(pdir)")" = "claude-local claude-local-gpu " ] || fail "$c: GPU=default installed $(have_profiles "$(pdir)")"
+[ "$(have_profiles "$(pdir)")" = "ai-sandbox-claude claude-local claude-local-gpu " ] || fail "$c: GPU=default installed $(have_profiles "$(pdir)")"
 [ -f "$H/.local/bin/ai-sandbox-run" ] || fail "$c: ISOLATION=1 installed no wrapper"
 ENVV=(HARNESSES=default ISOLATION=default)
 run_installer install
@@ -859,6 +868,42 @@ for bad in rel "@H@/a b" @H@/x/../y; do
   [ ! -e rel ] || fail "$c: a directory was made relative to the working directory"
 done
 
+# a dir of install/dirs below HOME (the sandboxed Claude Code's config dir) needs a plain HOME
+new_case dirs-home-refused
+rmdir "$H"
+H=$work/$c/my-home/a%b
+mkdir -p "$H"
+ENVV=(PREFIX="$work/$c/prefix" XDG_DATA_HOME="$work/$c/data" XDG_CONFIG_HOME="$work/$c/cfg" XDG_CACHE_HOME="$work/$c/cache")
+grep -q '^@HOME@/' "$REPO/install/dirs" || fail "$c: install/dirs names no dir below HOME"
+run_installer install
+expect_rc 1
+expect_err "HOME must be an absolute path of letters, digits and . _ + @ - (no . or .. segment) for the directory @HOME@/"
+[ -z "$(find "$work/$c" -mindepth 1 ! -path "$work/$c/my-home" ! -path "$H" -print -quit)" ] || fail "$c: something was written: $(find "$work/$c" -mindepth 1)"
+
+# ... but only when a shipped base is installed: HARNESSES=pi installs none, so it
+# neither needs a plain HOME for it nor makes the dir
+new_case dirs-home-no-base
+rmdir "$H"
+H=$work/$c/my-home/a%b
+mkdir -p "$H"
+ENVV=(HARNESSES=pi PREFIX="$work/$c/prefix" XDG_DATA_HOME="$work/$c/data" XDG_CONFIG_HOME="$work/$c/cfg" XDG_CACHE_HOME="$work/$c/cache")
+run_installer install
+expect_rc 0
+[ ! -e "$H/.claude-sandbox" ] || fail "$c: HARNESSES=pi made ~/.claude-sandbox"
+[ -d "$work/$c/cache/pi" ] || fail "$c: the cache dirs were not made"
+
+# a shipped base's dir that is a symlink is refused: nono would grant its target
+new_case dirs-base-symlink-refused
+mkdir -p "$H/.claude"
+ln -s .claude "$H/.claude-sandbox"
+run_installer install
+expect_rc 1
+expect_err "$H/.claude-sandbox is a symbolic link"
+[ ! -e "$(manifest_of)" ] || fail "$c: the install went ahead"
+ENVV=(HARNESSES=pi)
+run_installer install
+expect_rc 0
+
 # ---- services and the sysctl line ----------------------------------------------
 # SERVICES: the units of install/services.json, from services/ (services-nono/
 # with ISOLATION=0), go to $XDG_CONFIG_HOME/systemd/user and the Caddyfile to
@@ -1034,9 +1079,12 @@ svc_case services-home-refused
 H=$work/$c/my-home/a%b
 mkdir -p "$H/projects"
 ENVV+=(PREFIX="$work/$c/prefix" XDG_DATA_HOME="$work/$c/data" XDG_CONFIG_HOME="$work/$c/cfg" XDG_CACHE_HOME="$work/$c/cache")
+# without the dirs of install/dirs below HOME, which refuse such a HOME first (dirs-home-refused)
+own_repo
+grep -v '^@HOME@/' "$REPO/install/dirs" >"$R/install/dirs"
 run_installer install
 expect_rc 1
-expect_err "HOME must be"
+expect_err "HOME must be an absolute path of letters, digits and . _ + @ - (no . or .. segment) for the service units"
 if [ -e "$work/$c/data" ] || [ -e "$work/$c/cfg" ] || [ -e "$work/$c/prefix" ]; then fail "$c: something was written"; fi
 
 # the data dirs of install/services.json: resolved, made 0700, not in the manifest
@@ -1607,6 +1655,58 @@ run_installer install --layer extra="$work/$c/l"
 expect_rc 0
 expect_err "nono pull example-ns/extra"
 [ "$(nono_did pull)" = "$(pins)" ] || fail "$c: pulled $(nono_did pull)"
+
+# ---- shipped bases ---------------------------------------------------------------
+# A shipped base (install/bases.json: base -> the registry pack it is made from) is
+# installed with the profiles that extend it, and the pack it is made from is pulled
+# (no profile extends that pack any more); a reinstall without such a profile removes
+# the base, and so does uninstall.
+new_case bases-installed
+run_installer install
+expect_rc 0
+f=$(pdir)/ai-sandbox-claude.json
+cmp -s "$REPO/profiles/ai-sandbox-claude.json" "$f" || fail "$c: $f is not a copy of profiles/ai-sandbox-claude.json"
+grep -qxF "$(sha256sum <"$f" | cut -d' ' -f1)  $f" "$(manifest_of)" || fail "$c: $f is not in the manifest"
+nono_did pull | grep -qxF "$(pin_of nolabs-ai/claude)" || fail "$c: the pack of the base was not pulled: $(nono_did pull)"
+grep -qF "pulling the nono pack $(pin_of nolabs-ai/claude) (ai-sandbox-claude.json needs it)" "$out" || fail "$c: the pull is not announced: $(cat "$out")"
+[ -d "$H/.claude-sandbox" ] && [ "$(stat -c %a "$H/.claude-sandbox")" = 700 ] || fail "$c: ~/.claude-sandbox is not a 0700 directory"
+ENVV=(HARNESSES=pi)
+run_installer install
+expect_rc 0
+[ ! -e "$f" ] || fail "$c: HARNESSES=pi left the base"
+! grep -qF "  $f" "$(manifest_of)" || fail "$c: the base is still in the manifest"
+ENVV=(HARNESSES=claude GPU=0)
+run_installer install
+expect_rc 0
+[ -f "$f" ] || fail "$c: HARNESSES=claude did not install the base again"
+run_installer uninstall
+expect_rc 0
+[ -z "$(find "$H" -type f -print -quit)" ] || fail "$c: files stayed after uninstall: $(find "$H" -type f)"
+
+# a layer's base wins over the shipped one, like any profile, and its pack is still pulled
+new_case bases-layer
+mkdir -p "$work/$c/l"
+printf '{"extends": ["default"], "meta": {"name": "ai-sandbox-claude"}}\n' >"$work/$c/l/ai-sandbox-claude.json"
+run_installer install --layer mine="$work/$c/l"
+expect_rc 0
+cmp -s "$work/$c/l/ai-sandbox-claude.json" "$(pdir)/ai-sandbox-claude.json" || fail "$c: the layer's base did not win"
+nono_did pull | grep -qxF "$(pin_of nolabs-ai/claude)" || fail "$c: the pack of the base was not pulled: $(nono_did pull)"
+
+# an install/bases.json that is not a map of base names to packs, or names a base
+# profiles/ lacks, refuses the run before anything is written
+i=0
+for bad in '[]' '{"a b": "nolabs-ai/claude"}' '{"ai-sandbox-claude": "-x/y"}' '{"ai-sandbox-claude": "nolabs-ai/claude@0.1.4"}' \
+  '{"ai-sandbox-claude": 1}' '{"missing-base": "nolabs-ai/claude"}' '{'; do
+  i=$((i + 1))
+  new_case "bases-refused-$i"
+  own_repo
+  printf '%s\n' "$bad" >"$R/install/bases.json"
+  run_installer install
+  expect_rc 1
+  expect_err "install/bases.json"
+  [ -z "$(find "$H" -mindepth 1 -print -quit)" ] || fail "$c: $bad wrote $(find "$H" -mindepth 1)"
+  [ -z "$(nono_did pull)" ] || fail "$c: $bad pulled $(nono_did pull)"
+done
 
 # ---- put and the manifest ------------------------------------------------------
 # a script that sources the installer and calls its functions

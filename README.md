@@ -20,9 +20,9 @@ from them (`profiles/`, `shell/`, `sysctl/`, `services/`, `services-nono/`,
 - `packages.<system>.ai-sandbox-run`: the isolation wrapper (bubblewrap around nono).
 - `checks.<system>`: `formatting`, `leaks`, `readme-options`, `readme-sections`, `ai-sandbox-run`,
   `shellcheck`, `actionlint`, `run-portable`, `install-sh`, `readme-deps`, `doc-refs`,
-  `boundary`, `nixos-output`, `render-profiles`, `render-aliases`, `render-units`, `render-sysctl`, `render-install`, `variant-sh`, `extends-shape`, `packs-pins`, `packs-activation`, `existing-flake-example`;
+  `boundary`, `nixos-output`, `render-profiles`, `render-aliases`, `render-units`, `render-sysctl`, `render-install`, `variant-sh`, `extends-shape`, `packs-pins`, `packs-activation`, `vendored-packs`, `claude-why`, `existing-flake-example`;
   the module checks (`checks/module`) `fixtures`, `isolation`, `profiles`, `aliases`,
-  `home`, `services`, `variants`, `harnesses`, `profile-unit`, `nixos`.
+  `home`, `services`, `variants`, `harnesses`, `profile-unit`, `bases`, `nixos`.
 - `apps.<system>.render`: `nix run .#render` from the checkout writes the generated files for use
   without Nix (`profiles/`, `shell/aliases.d/`, ...) from this module; the `render-*` checks compare them with its output.
 - `legacyPackages.<system>.render-tree`: that output as a store path.
@@ -111,6 +111,9 @@ What `enable = true` gives you, with every default:
   activation only warns when a pack is missing or at another version, or when
   nono's pack list cannot be read, and names the same `nono pull` line; it
   never pulls.
+- The sandboxed Claude has its own configuration directory, `~/.claude-sandbox`
+  (see "The sandboxed Claude's own directory" under "Isolation"): log in once
+  inside the sandbox.
 
 A project-directory variant is a harness profile with one more grant, with its
 own aliases:
@@ -192,6 +195,10 @@ the pack into your agent's own configuration. For the selected harnesses:
   and the symlink `~/.agents/skills/nono-sandbox`;
 - every pack: a marker file in `~/.config/nono/profile-drafts/`.
 
+The claude wiring serves the `claude` you start without the sandbox; the
+sandboxed one has its own directory, `~/.claude-sandbox`, which install creates
+(see "The sandboxed Claude's own directory" under "Isolation").
+
 `SERVICES=opencode-web` pulls the opencode pack even without `opencode` in
 `HARNESSES`. `scripts/install.sh uninstall` runs `nono remove` for the packs it
 pulled, which undoes this wiring; one that nono refuses (for example, a wired
@@ -228,7 +235,8 @@ Options (environment variables of `scripts/install.sh install`):
 - `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` are honoured: the nono
   profiles go to `$XDG_CONFIG_HOME/nono/profiles/`, the units to
   `$XDG_CONFIG_HOME/systemd/user/`, the manifest to `$XDG_DATA_HOME/ai-sandbox/`,
-  and the per-command cache directories (made `0700`) under `$XDG_CACHE_HOME`.
+  and the per-command cache directories (made `0700`) under `$XDG_CACHE_HOME`;
+  the sandboxed Claude's own directory is `$HOME/.claude-sandbox` (also `0700`).
   All of them, and `PREFIX`, must be absolute paths of letters, digits and
   `. _ + @ -` only.
 
@@ -310,6 +318,11 @@ not a pack named in `extends`. So `scripts/install.sh install` pulls each pack
 an installed profile extends that nono does not have, at the version
 `scripts/packs` pins (`nono pull <pack>@<version>`: nono checks the pack's
 signature and wires it into the agent's own configuration, such as its hooks).
+The `claude` profiles extend the shipped base `ai-sandbox-claude` instead of
+the pack (`install/bases.json` maps each shipped base to the pack it re-bases):
+the installer installs that base with any profile that extends it, unless a
+layer provides a profile of that name, and pulls its pack, whose hook and nono
+plugin the base uses.
 That needs network access once. The pulls come after every check and before
 the first file; offline, the install stops and names the `nono pull` line to
 run later. A pack nono already has, at any version, is left as it is (a
@@ -363,7 +376,7 @@ the Home Manager module's.
 | `gpu.args` | `[ "--allow-gpu" ]` | Extra `nono run` flags of the GPU aliases only; `--allow-gpu` belongs here, not in `nonoArgs`. |
 | `gpu.display` | `true` | Also grant what a windowed GPU application needs (X11 cookie, POSIX shared memory); `false` for headless compute. X11 has no client isolation. |
 | `gpu.enable` | `true` | Generate a GPU twin (`<profile>-gpu`) for each entry of `gpu.variants`, under its own alias; the default aliases stay without GPU. |
-| `gpu.variants` | `claude_gpu`, `opencode_gpu` | GPU alias name mapped to the harness it shadows; the twin extends the base's pack, not the base profile. |
+| `gpu.variants` | `claude_gpu`, `opencode_gpu` | GPU alias name mapped to the harness it shadows; the twin extends the base's pack (or its ai-sandbox base), not the base profile. |
 | `harnessProfiles` | read-only | The command of every enabled harness mapped to its profile name, also while the module is off; twins and variants not included. |
 | `harnesses.<name>.allow` | `[ ]` | Read+write paths. |
 | `harnesses.<name>.allowFile` | `[ ]` | Read+write single files. |
@@ -372,7 +385,7 @@ the Home Manager module's.
 | `harnesses.<name>.enable` | `true` | Generate this harness's profile and aliases. |
 | `harnesses.<name>.exclude` | `[ ]` | `groups.exclude`: inherited groups unrelated to what the agent needs. |
 | `harnesses.<name>.include` | `[ ]` | `groups.include` for packs whose own group list is incomplete on NixOS. |
-| `harnesses.<name>.pack` | — | The nono registry pack the profile extends (its single `extends` entry); the presets set it. |
+| `harnesses.<name>.pack` | — | The nono registry pack the profile extends (its single `extends` entry); the presets set it; `nolabs-ai/claude` is re-based as `ai-sandbox-claude`, which the profile extends instead. |
 | `harnesses.<name>.package` | `null` | The harness's CLI, installed while the harness and the module are on; must provide `bin/<name>`. `null` installs nothing. |
 | `harnesses.<name>.profileName` | — | Name of the generated nono profile; the presets set it. |
 | `harnesses.<name>.read` | `[ ]` | Read-only paths. |
@@ -380,14 +393,14 @@ the Home Manager module's.
 | `harnesses.<name>.readsSharedSkills` | `false` | Add a read grant on `sharedSkillsDir` (the harness scans it and its pack does not grant it). |
 | `harnesses.<name>.setVars` | `{ }` | Environment variables set inside the sandbox (nono expands `$XDG_*` and `$HOME`). |
 | `harnesses.<name>.unixSocketSubtreeBind` | `[ ]` | Extra connect+bind socket subtrees under unix mediation. |
-| `isolation.enable` | `true` | The namespace isolation around nono (`ai-sandbox-run`): hides the runtime dir, sockets, other processes and the host `/tmp`; read-only git hooks and config. Adds an `<alias>_nono` twin of every alias. |
+| `isolation.enable` | `true` | The namespace isolation around nono (`ai-sandbox-run`): hides the runtime dir, sockets, other processes and the host `/tmp`; read-only git hooks and config. Adds an `<alias>_nono` twin of every alias but a variant with `gitDirs`. |
 | `isolation.layers` | all seven | The isolation layers on by default (`session`, `docker`, `system`, `pid`, `tmp`, `git`, `userns`); `AI_SANDBOX_RELAX` turns them off for one run. |
 | `nonoArgs` | `[ "--allow-cwd" ]` | Extra `nono run` flags of every generated alias; path grants belong in the profile, not here. |
-| `packDefaults.<name>.allow` | `[ ]` | Read+write paths of every profile that extends the pack `<name>`. |
-| `packDefaults.<name>.allowFile` | `[ ]` | Read+write single files of every profile that extends the pack. |
+| `packDefaults.<name>.allow` | `[ ]` | Read+write paths of every profile of the pack `<name>`. |
+| `packDefaults.<name>.allowFile` | `[ ]` | Read+write single files of every profile of the pack. |
 | `packDefaults.<name>.deny` | `[ ]` | Paths denied on top of `profileDefaults.deny`. |
-| `packDefaults.<name>.read` | `[ ]` | Read-only paths of every profile that extends the pack. |
-| `packDefaults.<name>.readFile` | `[ ]` | Read-only single files of every profile that extends the pack. |
+| `packDefaults.<name>.read` | `[ ]` | Read-only paths of every profile of the pack. |
+| `packDefaults.<name>.readFile` | `[ ]` | Read-only single files of every profile of the pack. |
 | `packDefaults.<name>.setVars` | `{ }` | Environment variables set inside the sandbox (nono expands `$XDG_*` and `$HOME`). |
 | `packDefaults.<name>.unixSocketSubtreeBind` | `[ ]` | Extra connect+bind socket subtrees under unix mediation. |
 | `package` | `pkgs.nono` | The nono sandbox CLI. |
@@ -411,7 +424,7 @@ the Home Manager module's.
 | `services.<name>.profile.denyVars` | `[ "WAYLAND_DISPLAY" "DISPLAY" ]` | Variables stripped, so the harness copies through the terminal (OSC 52). |
 | `services.<name>.profile.exclude` | `[ ]` | `groups.exclude`: inherited groups unrelated to what the agent needs. |
 | `services.<name>.profile.include` | `[ ]` | `groups.include` for packs whose own group list is incomplete on NixOS. |
-| `services.<name>.profile.pack` | — | The nono registry pack the service's profile extends (its single `extends` entry). |
+| `services.<name>.profile.pack` | — | The nono registry pack the service's profile extends (its single `extends` entry); `nolabs-ai/claude` is re-based as `ai-sandbox-claude`. |
 | `services.<name>.profile.read` | `[ ]` | Read-only paths. |
 | `services.<name>.profile.readFile` | `[ ]` | Read-only single files. |
 | `services.<name>.profile.readsSharedSkills` | `false` | Add a read grant on `sharedSkillsDir`. |
@@ -433,6 +446,7 @@ the Home Manager module's.
 | `variants.<name>.allowFile` | `[ ]` | Read+write single files. |
 | `variants.<name>.allowGpu` | `false` | Grant the GPU: `allow_gpu` in the profile and read access to `/run/udev`. |
 | `variants.<name>.deny` | `[ ]` | Paths denied on top of `profileDefaults.deny`. |
+| `variants.<name>.gitDirs` | `[ ]` | Git dirs besides the project's `.git` this variant writes to (a bare repository): the isolation holds their hooks, config and `info/` read-only. Grants nothing; needs the isolation's `git` layer; no `<alias>_nono` twin. See [Extra git directories](#extra-git-directories). |
 | `variants.<name>.harness` | — | The harness (key of `harnesses`) this variant is layered on. |
 | `variants.<name>.nonoArgs` | `[ ]` | Extra `nono run` flags of this variant's alias only. |
 | `variants.<name>.read` | `[ ]` | Read-only paths. |
@@ -491,10 +505,104 @@ restricts unprivileged user namespaces, for example), the agent does not start
 and the message names the `_nono` alias. The design is in
 `docs/specs/2026-09-26-sandbox-namespace-isolation-design.md`.
 
-Limit: the `claude` profiles inherit read and write on `$HOME/.claude` from the
-`nolabs-ai/claude` pack, so a session can edit the hooks that pack wired there,
-and a hook it plants would run unsandboxed the next time you start `claude`
-bare; a layer or variant only adds grants (`extends`), so it cannot narrow this.
+### Extra git directories
+
+A variant that writes to a git directory outside the project, such as a bare
+repository whose work tree is your home, lists it in `gitDirs` besides granting
+it:
+
+```nix
+programs.aiSandbox.variants.claude_cfg = {
+  harness = "claude";
+  suffix = "cfg";
+  allow = [ "$HOME/src/config.git" ];
+  gitDirs = [ "$HOME/src/config.git" ];
+};
+```
+
+Without it a session could write hooks or config (`core.fsmonitor`,
+`core.hooksPath`, an alias) that git runs outside the sandbox the next time you
+use that repository. With it, the alias passes `--git-dir` to `ai-sandbox-run`,
+which binds the directory's `hooks/`, `config`, `config.worktree`, `info/`, the
+in-tree includes and hooks directory these name (a relative `core.hooksPath`
+counts from `core.worktree` when set), and each linked worktree's
+`worktrees/*/config.worktree`, `commondir` and `gitdir` read-only, as the `git`
+layer does for the project's `.git`; objects, refs and the worktrees' indexes
+stay writable, so commits work. The wrapper refuses to
+start if the directory is missing, has no `hooks/` (create it once) or has a
+`commondir` file (git would read another directory's config). Such a variant has
+no `_nono` twin, the module refuses `gitDirs` without the `git` layer, and
+`AI_SANDBOX_RELAX=git` drops the protection for that run. Without Nix,
+`shell/variant.sh` has no `gitDirs`; pass `--git-dir DIR` to `ai-sandbox-run`
+in an alias of your own.
+
+The sandboxed Claude's own directory: the `claude` profiles (and their GPU
+twins and variants) extend `ai-sandbox-claude`, not the `nolabs-ai/claude`
+pack. That base is the pack's own profile at the version `scripts/packs` pins,
+copied into this repository (a check compares the copy byte for byte), without
+the pack's read and write on `~/.claude`, `~/.claude.json` and `~/.claude.lock`.
+It sets `CLAUDE_CONFIG_DIR` to `~/.claude-sandbox` (read and write) and loads
+the pack's nono plugin read-only from the pack (`CLAUDE_CODE_PLUGIN_DIRS`,
+Claude Code 2.1.280 or newer). So a session cannot edit the settings, hooks
+and plugins of the `claude` you start without the sandbox. A grant narrower
+than the directory does not work: Claude Code renews its login by writing a
+temporary file next to the credentials and renaming it, which needs write on the
+whole directory, and that write would also let a session replace `settings.json`.
+
+- First run: log in once inside the sandbox (`claude`, then `/login`, or
+  `claude auth login`); paste the code the login page shows, or start it with
+  `AI_SANDBOX_RELAX=browser` to open the login URL in your session.
+- Your sessions, settings, `CLAUDE.md`, skills and plugins in `~/.claude` stay
+  outside; copy what you want into `~/.claude-sandbox`.
+- Never start `claude` outside the sandbox with `CLAUDE_CONFIG_DIR` pointing at
+  `~/.claude-sandbox`: a session can write hooks there, and they would run
+  unsandboxed.
+- Copy, never symlink: activation and the installer refuse a
+  `~/.claude-sandbox` that is a symbolic link, since nono would grant its
+  target (`~/.claude`, say).
+- One directory for all of them: `claude`, `claude_gpu` and every variant on the
+  claude harness share `~/.claude-sandbox`. A session in one can plant hooks,
+  settings or plugins there that run in the next session of another, with that
+  alias's grants; so the widest claude variant sets the reach of all of them.
+- A variant that grants read and write on a git directory (a bare repository of
+  your config files, say) lets a session plant hooks or config there that git
+  runs outside the sandbox. List that directory in the variant's `gitDirs`
+  ([Extra git directories](#extra-git-directories)).
+
+Limit: the `opencode` profiles inherit read and write on `$HOME/.claude` from
+the `nolabs-ai/opencode` pack, so an opencode session can edit the hooks the
+claude pack wired there, and a hook it plants would run unsandboxed the next time
+you start `claude` bare; a layer or variant only adds grants (`extends`), so it
+cannot narrow this.
+
+### Known limitations
+
+- A `setVars.CLAUDE_CONFIG_DIR` or `setVars.CLAUDE_CODE_PLUGIN_DIRS` on a claude
+  harness or variant silently replaces the base's value (nono's child-wins
+  `set_vars`): the first undoes the separate config dir (the grants still deny
+  `~/.claude`), the second drops the nono plugin.
+- Claude Code's IDE integration (`/ide`) does not work inside: it looks for the
+  IDE's lockfiles in `~/.claude/ide`, which the sandbox denies (they carry the
+  IDE's token, so do not grant it).
+- Starting a `claude` alias from inside `~/.claude` grants it read and write
+  after all: `--allow-cwd` grants the working directory.
+- A session can rename the project's `.git` (or a `gitDirs` directory whose
+  parent it may write) and put a new one in its place; the read-only binds
+  stay on the renamed directory.
+- A session can add a `commondir` file to a `gitDirs` directory, which points
+  git at config it wrote; the alias then refuses to start, but a git command
+  you run on that repository before reading the message follows it. Setting
+  `GIT_COMMON_DIR` to the directory itself in the command you use for it
+  closes this.
+- A linked worktree of a `gitDirs` directory added after the session starts
+  is not covered: its `worktrees/<id>/config.worktree` and `commondir` stay
+  writable for that session. Likewise, a project whose `.git` is a file (a
+  linked worktree) gets no binds from the `git` layer, and that layer leaves
+  the project's own `.git/worktrees/` writable; list the repository in
+  `gitDirs` to hold them.
+- What a session commits to a `gitDirs` repository lands in its work tree when
+  you check it out (for a bare repository of your config files: your shell
+  start-up files); review it first.
 
 ## Checks
 
@@ -510,4 +618,7 @@ Nix).
 
 ## Licence
 
-MIT, see `LICENSE`.
+MIT, see `LICENSE`. Except the vendored `nolabs-ai/claude` profile
+(`modules/home-manager/vendor/nolabs-ai-claude.policy.json`) and the base
+derived from it (`profiles/ai-sandbox-claude.json`): Apache-2.0, by nolabs-ai;
+source, licence text and changes in `modules/home-manager/vendor/`.

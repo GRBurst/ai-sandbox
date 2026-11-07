@@ -42,6 +42,23 @@
           default = [];
           description = "Extra `nono run` flags of this variant's alias only (the GPU flag belongs here, never in `nonoArgs` of the module).";
         };
+        gitDirs = lib.mkOption {
+          type = with lib.types; listOf str;
+          default = [];
+          example = ["$HOME/src/config.git"];
+          description = ''
+            Git directories besides the project's own `.git` that this variant writes to, such as
+            a bare repository the agent commits to (grant it in `allow` as well; this option grants
+            nothing). The isolation wrapper holds each one's `hooks/`, `config`, `config.worktree`,
+            `info/`, in-tree config includes and its linked worktrees' `config.worktree`,
+            `commondir` and `gitdir` read-only, as it does the project's `.git`, so
+            objects and refs stay writable but nothing the agent writes there runs outside the
+            sandbox. Absolute or `$HOME/...`, expanded when the alias runs. The wrapper refuses to
+            start if one is missing, has no `hooks/` directory or has a `commondir` file. Needs
+            the namespace isolation with its `git` layer; such a variant gets no `<alias>_nono`
+            twin, since nono alone cannot hold them read-only.
+          '';
+        };
       };
   };
 
@@ -57,6 +74,12 @@
   clashes =
     lib.filterAttrs (_: as: lib.length (lib.unique (map (a: removeAttrs live.${a} ["nonoArgs"]) as)) > 1)
     byProfile;
+
+  # gitDirs is enforced by the isolation wrapper's git layer only, and lands in a shell string
+  # inside single and double quotes: no quote, backtick, `$` (but the leading `$HOME/`) or backslash.
+  withGitDirs = lib.filterAttrs (_: v: v.gitDirs != []) live;
+  gitLayerOn = cfg.isolation.enable && lib.elem "git" cfg.isolation.layers;
+  badGitDirs = lib.filter (d: builtins.match "(/|[$]HOME/)[^'\"`$\\\n]*" d == null) (lib.concatMap (v: v.gitDirs) (lib.attrValues withGitDirs));
 in {
   options.programs.aiSandbox = {
     variants = lib.mkOption {
@@ -65,7 +88,7 @@ in {
       description = ''
         Extra aliases layered on a harness: the attribute is the alias, `harness` the command it
         runs. Each generates the profile `<profileName>-<suffix>` (the harness's grants plus the
-        delta given here) and the aliases `<alias>` and `<alias>_nono`.
+        delta given here) and the aliases `<alias>` and `<alias>_nono` (no `_nono` twin with `gitDirs`).
       '';
     };
 
@@ -101,7 +124,21 @@ in {
     };
 
     assertions =
-      lib.mapAttrsToList (profile: as: {
+      [
+        {
+          assertion = withGitDirs == {} || gitLayerOn;
+          message = ''
+            ai-sandbox: programs.aiSandbox.variants ${lib.concatStringsSep ", " (lib.attrNames withGitDirs)} set gitDirs, which only the namespace isolation's git layer holds read-only. Turn on isolation.enable with "git" in isolation.layers, or drop gitDirs (and the grant on those directories).
+          '';
+        }
+        {
+          assertion = badGitDirs == [];
+          message = ''
+            ai-sandbox: programs.aiSandbox.variants.<name>.gitDirs entries must be absolute or start with $HOME/, and contain no quote, backtick, backslash, newline or other `$` (got: ${lib.concatStringsSep ", " badGitDirs}).
+          '';
+        }
+      ]
+      ++ lib.mapAttrsToList (profile: as: {
         assertion = false;
         message = ''
           ai-sandbox: programs.aiSandbox.variants ${lib.concatStringsSep ", " as} share the profile ${profile} (same harness and suffix) but differ in its grants. Give them distinct suffixes, or the same delta.

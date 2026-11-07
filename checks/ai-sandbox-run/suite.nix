@@ -199,6 +199,49 @@ runCommand name {
   (cd "$R" && "$W" -- true)
   [ ! -e "$NIX_BUILD_TOP/fsmonitor-ran" ] || fail "git-no-exec: wrapper executed the repo's fsmonitor"
   git -C "$R" config --unset core.fsmonitor
+  # case git-dir-extra: a git dir named with --git-dir (a variant's gitDirs, e.g. a bare
+  # repository the agent commits to): hooks, config and info read-only, objects writable;
+  # a relative, missing, hook-less or commondir'd one refused.
+  B=$NIX_BUILD_TOP/bare.git; git init -q --bare "$B"; mkdir -p "$B/hooks" "$B/info"
+  "$W" --git-dir "$B" -- sh -c '! touch "$1/hooks/x" 2>/dev/null' _ "$B" || fail "git-dir: hooks writable"
+  "$W" --git-dir "$B" -- sh -c '! (echo x >> "$1/config") 2>/dev/null' _ "$B" || fail "git-dir: config writable"
+  "$W" --git-dir "$B" -- sh -c '! touch "$1/info/x" 2>/dev/null' _ "$B" || fail "git-dir: info writable"
+  "$W" --git-dir "$B" -- sh -c 'touch "$1/objects/x" && rm "$1/objects/x"' _ "$B" || fail "git-dir: objects not writable"
+  "$W" -- sh -c 'touch "$1/hooks/x" && rm "$1/hooks/x"' _ "$B" || fail "git-dir: held without --git-dir"
+  (AI_SANDBOX_RELAX=git "$W" --git-dir "$B" -- sh -c 'touch "$1/hooks/x" && rm "$1/hooks/x"' _ "$B") || fail "git-dir: relax-git"
+  git_dir_refused() {
+    local want=$1 rc=0; shift
+    "$W" "$@" -- touch "$NIX_BUILD_TOP/gd-ran" 2>err || rc=$?
+    [ "$rc" = 1 ] || fail "git-dir-refused ($want): exit $rc"
+    grep -q "$want" err || fail "git-dir-refused ($want): $(cat err)"
+    [ ! -e "$NIX_BUILD_TOP/gd-ran" ] || fail "git-dir-refused ($want): command ran"
+  }
+  git_dir_refused 'must be an absolute path' --git-dir bare.git
+  git_dir_refused 'does not exist' --git-dir "$NIX_BUILD_TOP/no-such.git"
+  git_dir_refused 'not a git directory' --git-dir "$NIX_BUILD_TOP"
+  rm -rf "$B/hooks"; git_dir_refused 'no hooks directory' --git-dir "$B"; mkdir "$B/hooks"
+  echo "$R/.git" > "$B/commondir"; git_dir_refused 'has a commondir file' --git-dir "$B"; rm "$B/commondir"
+  # case git-dir-worktrees: a linked worktree of the git dir: its config.worktree,
+  # commondir and gitdir read-only (git reads the first two for that worktree's
+  # config), its index writable.
+  WT=$B/worktrees/wt1; mkdir -p "$WT"; : > "$WT/config.worktree"
+  echo ../.. > "$WT/commondir"; echo "$NIX_BUILD_TOP/wt1/.git" > "$WT/gitdir"
+  for f in config.worktree commondir gitdir; do
+    "$W" --git-dir "$B" -- sh -c '! (echo x >> "$1") 2>/dev/null' _ "$WT/$f" || fail "git-dir-worktrees: $f writable"
+  done
+  "$W" --git-dir "$B" -- sh -c 'touch "$1/index" && rm "$1/index"' _ "$WT" || fail "git-dir-worktrees: index not writable"
+  # case git-dir-config-worktree: a hooksPath and an include set in the git dir's
+  # config.worktree are held read-only too.
+  mkdir -p "$B/wthooks"; : > "$B/wtinc"
+  printf '[core]\n\thooksPath = %s\n[include]\n\tpath = wtinc\n' "$B/wthooks" > "$B/config.worktree"
+  "$W" --git-dir "$B" -- sh -c '! touch "$1/wthooks/x" 2>/dev/null' _ "$B" || fail "git-dir-config-worktree: hooksPath writable"
+  "$W" --git-dir "$B" -- sh -c '! (echo x >> "$1/wtinc") 2>/dev/null' _ "$B" || fail "git-dir-config-worktree: include writable"
+  # case git-dir-core-worktree: a relative hooksPath resolves against
+  # core.worktree (here set in config.worktree), not the git dir.
+  mkdir -p "$B/tree/hk"
+  printf '[core]\n\tworktree = %s\n\thooksPath = hk\n' "$B/tree" > "$B/config.worktree"
+  "$W" --git-dir "$B" -- sh -c '! touch "$1/tree/hk/x" 2>/dev/null' _ "$B" || fail "git-dir-core-worktree: hooksPath writable"
+  rm -rf "$B/worktrees" "$B/config.worktree" "$B/wthooks" "$B/wtinc" "$B/tree"
   mkdir -p /tmp/tdanc; T2=/tmp/tdanc; mkrepo "$T2/repo"
   (cd "$T2/repo" && TMPDIR=$T2 "$W" -- sh -c '! (echo x >> .git/config) 2>/dev/null') || fail "git-ro-under-tmpdir (RF1)"
   before=$(cd "$R" && find . | sort; git -C "$R" status --porcelain --ignored)

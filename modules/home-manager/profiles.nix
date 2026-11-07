@@ -23,6 +23,13 @@
   # the zsh paths to deny, the mediation switch, and the editor grants with the darkman
   # mode file (read-only, single file; silently falls back to light).
   emitProfile = import ./profile.nix {inherit lib;};
+
+  # The packs ai-sandbox re-bases (./bases.nix): a profile of such a pack extends the base,
+  # the pack's profile without its grants on the harness's own config. The pack stays the
+  # profile's identity (packDefaults, the pin, the required pull).
+  bases = import ./bases.nix {inherit lib;};
+  extendsOf = pack: bases.${pack}.name or pack;
+
   mkProfile = args:
     emitProfile ({
         mediation = scfg.unixMediation.enable;
@@ -35,6 +42,8 @@
       // (let
         d = scfg.profileDefaults;
       in {
+        # the emitter's `pack` is the single `extends` entry
+        pack = extendsOf args.pack;
         deny = d.deny ++ (args.deny or []);
         allow = (args.allow or []) ++ d.allow;
         read = (args.read or []) ++ d.read;
@@ -130,6 +139,11 @@
   # The registry packs of the enabled harnesses and services, each once; the activation checks them.
   requiredPacks = lib.unique (map (c: sandboxSpecs.${c}.pack) managedCommands);
 
+  # The bases of those packs: emitted while a profile of their pack is.
+  used = lib.filterAttrs (p: _: lib.elem p requiredPacks) bases;
+  usedBases = lib.attrValues used;
+  baseProfiles = lib.mapAttrs' (pack: b: lib.nameValuePair b.name pack) used;
+
   baseProfileName = command: allSandboxProfiles.${command};
 
   # The TMPDIR grant, the cache grant and the cache-var pins are added here
@@ -211,7 +225,7 @@
 
   nonoProfileTargets =
     map (n: "${config.xdg.configHome}/nono/profiles/${n}.json")
-    allProfileNames;
+    (allProfileNames ++ lib.attrNames baseProfiles);
 in {
   options.programs.aiSandbox.internal = {
     managedCommands = lib.mkOption {
@@ -230,15 +244,28 @@ in {
       type = with lib.types; listOf str;
       internal = true;
       readOnly = true;
-      description = "Every emitted nono profile name: harnesses, services and variants.";
+      description = "Every emitted nono profile name: harnesses, services and variants (not the bases).";
+    };
+    baseProfiles = lib.mkOption {
+      type = with lib.types; attrsOf str;
+      internal = true;
+      readOnly = true;
+      description = "The emitted ai-sandbox bases (./bases.nix), each mapped to the registry pack it re-bases.";
+    };
+    baseDirs = lib.mkOption {
+      type = with lib.types; listOf str;
+      internal = true;
+      readOnly = true;
+      description = "The directories the emitted bases grant and need to exist (`$HOME/...`).";
     };
   };
 
   config = lib.mkMerge [
     {
       programs.aiSandbox.internal = {
-        inherit managedCommands requiredPacks;
+        inherit managedCommands requiredPacks baseProfiles;
         profileNames = allProfileNames;
+        baseDirs = lib.concatMap (b: b.dirs) usedBases;
       };
     }
 
@@ -252,7 +279,12 @@ in {
       in
         lib.listToAttrs
         (map (c: mkEntry (baseProfileArgs c)) managedCommands
-          ++ map (e: mkEntry (variantProfileArgs e)) variantEntries);
+          ++ map (e: mkEntry (variantProfileArgs e)) variantEntries
+          ++ map (b: {
+            name = "nono/profiles/${b.name}.json";
+            value.text = builtins.toJSON b.profile;
+          })
+          usedBases);
 
       # nono rewrites these in place through its save-profile path -- the
       # serialize-roundtrip it leaves behind is a regular file, which aborts

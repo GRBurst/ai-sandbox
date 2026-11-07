@@ -1,0 +1,125 @@
+{
+  "allow_launch_services": true,
+  "diagnostics": {
+    "suppress_system_services": [
+      "forbidden-exec-sugid"
+    ]
+  },
+  "environment": {
+    "set_vars": {
+      "CLAUDE_CODE_PLUGIN_DIRS": "$NONO_PACKAGES/nolabs-ai/claude",
+      "CLAUDE_CONFIG_DIR": "$HOME/.claude-sandbox"
+    }
+  },
+  "extends": [
+    "default"
+  ],
+  "filesystem": {
+    "allow": [
+      "$HOME/.local/state/claude/locks",
+      "$HOME/.cache/claude",
+      "$NONO_CONFIG/profile-drafts",
+      "/tmp/claude-$UID",
+      {
+        "path": "$HOME/Library/Keychains",
+        "when": "macos"
+      },
+      "$HOME/.claude-sandbox"
+    ],
+    "allow_file": [],
+    "bypass_protection": [
+      {
+        "path": "$HOME/Library/Keychains",
+        "when": "macos"
+      }
+    ],
+    "read": [
+      "$NONO_PACKAGES",
+      "$NONO_CONFIG/profiles"
+    ],
+    "unix_socket_dir_bind": [
+      {
+        "path": "$XDG_RUNTIME_DIR/cc-socks",
+        "when": "linux"
+      }
+    ]
+  },
+  "groups": {
+    "include": [
+      {
+        "name": "claude_code_macos",
+        "when": "macos"
+      },
+      {
+        "name": "claude_code_linux",
+        "when": "linux"
+      },
+      {
+        "name": "user_caches_macos",
+        "when": "macos"
+      },
+      {
+        "name": "claude_cache_linux",
+        "when": "linux"
+      },
+      "node_runtime",
+      "rust_runtime",
+      "python_runtime",
+      {
+        "name": "vscode_macos",
+        "when": "macos"
+      },
+      {
+        "name": "vscode_linux",
+        "when": "linux"
+      },
+      {
+        "name": "linux_sysfs_read",
+        "when": "linux"
+      },
+      "nix_runtime",
+      "git_config",
+      "unlink_protection"
+    ]
+  },
+  "meta": {
+    "description": "Modified by ai-sandbox from the nolabs-ai/claude 0.1.4 profile (Apache-2.0): no ~/.claude grants, an own config dir; see modules/home-manager/vendor/README.md",
+    "name": "ai-sandbox-claude"
+  },
+  "network": {
+    "block": false
+  },
+  "open_urls": {
+    "allow_localhost": true,
+    "allow_origins": [
+      "https://claude.ai",
+      "https://claude.com",
+      "https://api.anthropic.com",
+      "https://platform.claude.com"
+    ]
+  },
+  "rollback": {
+    "exclude_globs": [
+      "*.tmp.[0-9]*.[0-9a-f]*"
+    ],
+    "exclude_patterns": [
+      "node_modules",
+      ".next",
+      "__pycache__",
+      "target"
+    ]
+  },
+  "security": {
+    "capability_elevation": false,
+    "signal_mode": "isolated"
+  },
+  "session_hooks": {
+    "before": {
+      "script": "$NONO_PACKAGES/nolabs-ai/claude/bin/ensure-dirs.sh",
+      "timeout_secs": 10
+    }
+  },
+  "workdir": {
+    "access": "readwrite"
+  }
+}

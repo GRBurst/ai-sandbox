@@ -6,7 +6,7 @@
   pkgs,
   helpers,
 }: let
-  inherit (helpers) mkAssertionCheck aiFixtureWith aiNoNvf aiEmittedProfiles aiFailedWith aiFailsWith;
+  inherit (helpers) mkAssertionCheck aiFixtureWith aiNoNvf aiEmittedProfiles aiFailedWith aiFailsWith aiBasePack;
   home = "/tmp/ai-test";
 
   oc = {programs.aiSandbox.services.opencode-web.enable = true;};
@@ -255,9 +255,10 @@ in
       message = "services: the opencode-web profile extends its own pack, grants the project root and binds exactly its backend port";
     }
     {
-      # `network.listen_port` only in service profiles.
+      # `network.listen_port` only in service profiles. The ai-sandbox bases are exempt:
+      # their `network` is the pack's own, verbatim (the `bases` check).
       condition = let
-        all = aiEmittedProfiles both;
+        all = removeAttrs (aiEmittedProfiles both) (lib.attrNames aiBasePack);
       in
         lib.all (n: (all.${n} ? network) == lib.elem n ["opencode-web" "svc"]) (lib.attrNames all)
         && all.svc.network.listen_port == [15501];

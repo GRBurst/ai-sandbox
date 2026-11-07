@@ -74,6 +74,9 @@
       # The installer without Nix: dependencies, put, manifest, uninstall.
       install-sh = import ./install-sh {inherit pkgs lib self render;};
 
+      # The real nono: the claude profiles deny every write to Claude Code's own config.
+      claude-why = import ./claude-why.nix {inherit pkgs lib render;};
+
       # The README dependency table and scripts/deps list the same tools.
       readme-deps = import ./readme-deps.nix {inherit pkgs lib self;};
 
@@ -95,6 +98,9 @@
 
       # Every shipped and example profile has one `extends`: a pack, or a shipped profile.
       extends-shape = import ./extends-shape.nix {inherit pkgs lib self;};
+
+      # The vendored pack profiles of the ai-sandbox bases are the pinned version, byte for byte.
+      vendored-packs = import ./vendored-packs.nix {inherit pkgs lib self;};
 
       # The README path: the example flake with the module added evaluates, offline.
       existing-flake-example = import ./existing-flake.nix {inherit pkgs lib self home-manager;};

@@ -80,7 +80,7 @@ in {
           the namespace isolation around nono (ai-sandbox-run): hides the user
           runtime dir, Docker/system sockets, other processes and the host /tmp,
           and makes the repo's git hooks/config read-only. Adds a `<alias>_nono`
-          twin of every alias
+          twin of every alias but a variant with gitDirs
         ''
         // {default = true;};
 

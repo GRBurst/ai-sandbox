@@ -7,7 +7,10 @@
 }: let
   helpers = import ./lib.nix {inherit pkgs lib home-manager;};
   profileRows = import ./profile-rows.nix {inherit lib helpers;};
-  inherit (helpers) aiFixtureWith aiAllProfileNames mkAssertionCheck aiNoSandbox aiNoNvf aiNoGpu aiNoIsolation aiNoDisplay aiMediation aiMediationNvf aiEmittedProfiles aiUnixSocketGrants aiWithoutMediation aiMediationSockets aiGeneratedAliases aiExpectedNonoAliases aiAliasString aiWrapperArgv aiGpuVariants;
+  inherit (helpers) aiFixtureWith aiAllProfileNames mkAssertionCheck aiNoSandbox aiNoNvf aiNoGpu aiNoIsolation aiNoDisplay aiMediation aiMediationNvf aiEmittedProfiles aiUnixSocketGrants aiWithoutMediation aiMediationSockets aiGeneratedAliases aiExpectedNonoAliases aiAliasString aiWrapperArgv aiGpuVariants aiBasePack;
+  # The ai-sandbox bases carry the pack's own grants, verbatim (./bases.nix): the mediation
+  # switch changes the harness, service and variant profiles only.
+  baseNames = lib.attrNames aiBasePack;
 in {
   fixtures = mkAssertionCheck "ai-sandbox-fixtures" [
     {
@@ -119,8 +122,10 @@ in {
       # nothing else changes: minus the delta, each profile is the one the
       # switch-off fixture emits.
       condition = let
-        ps = aiEmittedProfiles aiMediation.config;
-        off = aiEmittedProfiles aiNoNvf.config;
+        all = aiEmittedProfiles aiMediation.config;
+        allOff = aiEmittedProfiles aiNoNvf.config;
+        ps = removeAttrs all baseNames;
+        off = removeAttrs allOff baseNames;
         want = n:
           {
             unix_socket = aiMediationSockets;
@@ -128,8 +133,9 @@ in {
           }
           // lib.optionalAttrs (lib.hasSuffix "-gpu" n) {unix_socket_dir = ["/tmp/.X11-unix"];};
       in
-        lib.attrNames ps
-        == lib.sort lib.lessThan (lib.attrNames off ++ ["svc-test"])
+        lib.attrNames all
+        == lib.sort lib.lessThan (lib.attrNames allOff ++ ["svc-test"])
+        && lib.all (b: all ? ${b} && all.${b} == allOff.${b}) baseNames
         && lib.all (n:
           ps.${n}.linux
           == {af_unix_mediation = "pathname";}
@@ -143,7 +149,7 @@ in {
       # lives in the profile's own runtime dir, which must be bindable -- and
       # it must be the very dir XDG_RUNTIME_DIR is redirected to.
       condition = let
-        ps = aiEmittedProfiles aiMediationNvf.config;
+        ps = removeAttrs (aiEmittedProfiles aiMediationNvf.config) baseNames;
       in
         ps
         != {}
@@ -193,17 +199,19 @@ in {
 
   profile-unit = import ./profile-unit.nix {inherit lib helpers;};
 
+  bases = import ./bases.nix {inherit lib helpers;};
+
   # The sandbox module alone: the profile files, the exact emitted set, the
   # reclaim of the files nono rewrites, and the off switch.
   profiles = let
     h = aiNoNvf.config;
-    names = lib.sort lib.lessThan aiAllProfileNames;
+    names = lib.sort lib.lessThan (aiAllProfileNames ++ baseNames);
     off = (aiFixtureWith {programs.aiSandbox.enable = false;}).config;
   in
     mkAssertionCheck "ai-sandbox-profiles" ([
         {
           condition = lib.attrNames (aiEmittedProfiles h) == names;
-          message = "ai-sandbox alone must emit exactly the four harness profiles and the two GPU twins (got: ${lib.concatStringsSep ", " (lib.attrNames (aiEmittedProfiles h))})";
+          message = "ai-sandbox alone must emit exactly the four harness profiles, the two GPU twins and the claude base (got: ${lib.concatStringsSep ", " (lib.attrNames (aiEmittedProfiles h))})";
         }
         {
           # nono rewrites a profile in place, which breaks HM's clobber check: every emitted

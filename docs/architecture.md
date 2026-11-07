@@ -66,21 +66,25 @@ docs/                             this file, docs/specs/
   artifacts are its output.
 
 Isolation invariants hold on both paths: every profile has exactly one
-`extends`, every alias has its `<alias>_nono` twin, `AI_SANDBOX_RELAX`
-semantics are fixed, and the wrapper fails closed.
+`extends`, every alias (but a variant with `gitDirs`) has its `<alias>_nono`
+twin, `AI_SANDBOX_RELAX` semantics are fixed, and the wrapper fails closed.
 
 **Invariant E** (the one the rest follows from): every nono profile has one
 `extends` entry, and its ancestry holds exactly one registry pack. nono's
 `extends` only adds, and the profile schema has no way to remove an inherited
 filesystem path, so a second base could never be taken back. The Nix module
 flattens: every profile it emits, twins and variants included, extends its
-harness's pack directly, not the harness's profile. Without Nix a profile of
+harness's pack directly, not the harness's profile, or the ai-sandbox base that
+re-bases that pack (AD16): `ai-sandbox-claude` for `nolabs-ai/claude`, a copy of
+the pack's own profile at the pinned version without its grants on `~/.claude`,
+which extends nono's `default` (no registry pack). Without Nix a profile of
 your own (such as `examples/without-nix/pi-claude-notes.json`) chains to one
-shipped profile, which extends the pack. The module checks assert the flat form
+shipped profile, which extends the pack or its base. The module checks assert the flat form
 on every emitted profile (the message "isolation invariant E"); `extends-shape`
-asserts one `extends` on every shipped and example profile, naming a pack for a
-shipped one and a shipped profile for an example, and that `scripts/packs` pins
-exactly the packs the shipped profiles extend.
+asserts one `extends` on every shipped and example profile, naming a pack or a
+shipped base for a shipped one, `default` for a base and a shipped profile for
+an example, and that `scripts/packs` pins exactly the packs the shipped
+profiles extend or their bases re-base.
 
 ## Artifacts and their checks
 
@@ -90,10 +94,11 @@ exactly the packs the shipped profiles extend.
 | `shell/aliases.d/`, `shell/aliases-nono.d/` | the fixture's `home.shellAliases` and `home.sessionVariables` (isolation on, off) | `render-aliases`; `install-sh` reads them back in bash and zsh |
 | `services/`, `services-nono/` | the unit files Home Manager builds for the fixture (through the wrapper, isolation off) | `render-units` |
 | `sysctl/60-ai-sandbox.conf` | `nixosModules.default` evaluated | `render-sysctl` |
-| `install/{harnesses.json,services.json,dirs}` | the fixture's harnesses, services and activation dirs | `render-install` |
+| `install/{harnesses.json,services.json,bases.json,dirs}` | the fixture's harnesses, services, emitted bases (base → the pack it re-bases) and activation dirs | `render-install` |
+| `modules/home-manager/vendor/nolabs-ai-claude.policy.json` | hand-copied: the `nolabs-ai/claude` pack's `policy.json` (installed by nono as `profiles/claude.json`), byte for byte, at the version `scripts/packs` pins; its sha256 and version are recorded in `modules/home-manager/bases.nix`; source, licence (Apache-2.0, `LICENSE-Apache-2.0` beside it) and the changes of the derived base in `vendor/README.md` | `vendored-packs` (hash and pin), `bases` (the base is the copy minus `~/.claude`, with a modification notice), `claude-why` (nono denies `~/.claude` writes) |
 | `shell/variant.sh` | hand-written; the one re-implementation of the alias builder | `variant-sh` (byte for byte against the Nix strings, bash, zsh and dash) |
 | `shell/aliases.sh`, `scripts/install.sh`, `scripts/deps` | hand-written | `install-sh`, `readme-deps`, `shellcheck` |
-| `scripts/packs` | hand-written: the version of each registry pack; read by the module and the installer | `extends-shape`, `install-sh`, `packs-pins`, `packs-activation` |
+| `scripts/packs` | hand-written: the version of each registry pack; read by the module and the installer | `extends-shape`, `install-sh`, `packs-pins`, `packs-activation`, `vendored-packs` |
 | `packages/ai-sandbox-run/portable-preamble.sh` | hand-written template | `run-portable` (the wrapper suite against the installed wrapper), `preamble-vars` inside it |
 | `examples/existing-flake/` | hand-written | `existing-flake-example` |
 | `examples/without-nix/*.json` | hand-written | `extends-shape` |
@@ -159,7 +164,9 @@ copying them:
   one override), `aiFailedWith` and `aiFailsWith` (failed assertions as data),
   `mkAssertionCheck`, the fixtures `aiNoNvf`, `aiNoSandbox`, `aiNoGpu`,
   `aiNoIsolation`, `aiNoDisplay`, `aiMediation`, the profile and alias
-  helpers (`aiProfile`, `aiPack`, `aiEmittedProfiles`, `aiUnixSocketGrants`, `aiGeneratedAliases`,
+  helpers (`aiProfile`, `aiPack`, `aiBase` (profile → what it extends: its pack or
+  the ai-sandbox base of that pack), `aiBasePack` (base → the pack it re-bases),
+  `aiEmittedProfiles`, `aiUnixSocketGrants`, `aiGeneratedAliases`,
   `aiExpectedAlias`, `aiExpectedGpuAlias`, `aiExpectedNonoAliases`,
   `aiAllAliasesOf`, `aiNonoTwinsOf`, `aiEveryAliasOf`, `aiTmpdirExpr`) and the
   profile-name lists (`aiAllProfileNames`, `aiBaseProfileOf`).
@@ -182,7 +189,7 @@ instead of drifting. `AGENTS.md` carries the same rule.
 | AD5 | Services keep the `agent-web` vocabulary (`%t/agent-web/<unit>`, `$XDG_CONFIG_HOME/agent-web/<name>/Caddyfile`, the activation list `agentWebDirs`) as the documented name for "agent web UI" services | the name identifies nobody; a rename changes unit texts and live runtime paths for no function |
 | AD6 | `render-units` copies the unit files Home Manager itself builds for the render fixture and replaces store paths and sentinels with placeholders; no second INI serialiser | compares byte for byte what a Nix user gets |
 | AD7 | Two alias sets ship: `shell/aliases.d/` (isolation on) and `shell/aliases-nono.d/` (isolation off), one file per command and variant suffix, `00-session.sh` for the session variables; likewise two unit sets, `services/` (through the wrapper) and `services-nono/` (isolation off: no wrapper and no `AI_SANDBOX_RELAX=` line) | the installer's `ISOLATION=0` and `GPU=0` select files; every line is still rendered from Nix |
-| AD8 | The installer reads rendered manifests: `install/harnesses.json` (harness → profile, variants), `install/services.json` (service → profile, units, Caddyfile, data dirs, working tree, the commands its units run) and `install/dirs` | it selects files without knowing Nix naming rules |
+| AD8 | The installer reads rendered manifests: `install/harnesses.json` (harness → profile, variants), `install/services.json` (service → profile, units, Caddyfile, data dirs, working tree, the commands its units run), `install/bases.json` (shipped base → the pack it re-bases) and `install/dirs` | it selects files without knowing Nix naming rules |
 | AD9 | `scripts/install.sh` reads its tool list from `scripts/deps` only | the README table equals that file (P2) |
 | AD10 | The portable wrapper is `portable-preamble.sh` (a template with `@var@` placeholders for the injected variables) plus `sandbox-run.sh` verbatim; `preamble-vars` checks that the Nix preamble and the portable one assign the same variable set | a variable added on one side only fails at build time, not at a user's first run |
 | AD11 | The `boundary` check carries the layering rules: no `osConfig`, no other layer's option namespace, no firewall option on a non-comment line of `modules/` or `packages/`; no `.nix` under `modules/` names a rendered artifact directory | the boundaries above stay enforced by code |
@@ -190,3 +197,4 @@ instead of drifting. `AGENTS.md` carries the same rule.
 | AD13 | The project-directory variant used in examples, docs and checks is `variants.pi_notes = {harness = "pi"; suffix = "notes"; allow = ["$HOME/src/notes"];}`: profile `pi-claude-notes`, aliases `pi_notes` and `pi_notes_nono` | a neutral example that names no one's directory layout |
 | AD14 | `shellcheck` takes explicit lists: checked files (`-s bash`) and excluded files (frozen wrapper sources, the portable preamble, rendered alias files); every tracked `*.sh` is in exactly one list | frozen files cannot be fixed without changing the wrapper; they stay covered as assembled scripts |
 | AD15 | Without Nix, `SERVICE_PATH` (default `/usr/local/bin:/usr/bin:/bin`) replaces `@SERVICE_PATH@`; the installer refuses when an entry is missing, user-writable or user-owned, lies in the service's working tree or in a read-write grant of its installed profile (a layer's, if one overrides it), or when `opencode` is not found on it | the unit runs `opencode` with `--strict-broker-path`, which refuses a `PATH` directory that a filesystem grant covers or that the user can write (an owner can chmod it back); failing at install beats a unit that never starts |
+| AD16 | A pack whose own grants reach the harness's unsandboxed configuration is re-based: its profile is vendored byte for byte at the pinned version (`modules/home-manager/vendor/`) and `modules/home-manager/bases.nix` turns it into an ai-sandbox base that extends nono's `default`; the harness's profiles extend the base. The first: `nolabs-ai/claude` → `ai-sandbox-claude`, without the pack's `~/.claude`, `~/.claude.json` and `~/.claude.lock` grants, with `CLAUDE_CONFIG_DIR=$HOME/.claude-sandbox` (read and write; the only file naming that variable) and the pack's nono plugin read-only (`CLAUDE_CODE_PLUGIN_DIRS`) | nono's `extends` cannot drop an inherited grant, and Claude Code renews its login by a rename next to the credentials, so it needs write on the whole directory, which also lets a session replace `settings.json` and plant hooks that a bare `claude` runs unsandboxed; an own directory is the one Landlock-sound split. The hash and pin check keeps the copy in step with the pinned pack |

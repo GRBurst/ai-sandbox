@@ -43,19 +43,24 @@
   # transpiled each pi extension, wrote the .mjs, then was denied reading it
   # back, and every extension failed to load with EACCES on its own cache file.
   sandboxCacheDirAbs = command: "${config.xdg.cacheHome}/${command}";
+
+  # A base's own dir (`$HOME/...`, as the profile grants it), absolute.
+  baseDirAbs = d:
+    assert lib.assertMsg (lib.hasPrefix "$HOME/" d) "ai-sandbox: a base's dir must be under $HOME: ${d}";
+      homeDir + lib.removePrefix "$HOME" d;
 in {
   options.programs.aiSandbox.internal.activationDirs = lib.mkOption {
     type = with lib.types; listOf str;
     internal = true;
     readOnly = true;
-    description = "The absolute directories activation creates (0700): every managed command's cache dir and, with the editor grants, every profile's runtime dir. Empty while the module is off.";
+    description = "The absolute directories activation creates (0700): every managed command's cache dir, the dirs of the emitted bases (a config dir of their harness's own) and, with the editor grants, every profile's runtime dir. Empty while the module is off.";
   };
 
   config = lib.mkMerge [
     {
-      programs.aiSandbox.internal.activationDirs =
-        lib.optionals scfg.enable (map sandboxCacheDirAbs scfg.internal.managedCommands
-          ++ lib.optionals editorEnabled (map sandboxRuntimeDir scfg.internal.profileNames));
+      programs.aiSandbox.internal.activationDirs = lib.optionals scfg.enable (map sandboxCacheDirAbs scfg.internal.managedCommands
+        ++ map baseDirAbs scfg.internal.baseDirs
+        ++ lib.optionals editorEnabled (map sandboxRuntimeDir scfg.internal.profileNames));
     }
 
     (lib.mkIf scfg.enable {
@@ -90,6 +95,19 @@ in {
       # The mode matters here: these dirs hold the transpiled .mjs that the
       # harness then executes, so a world-readable cache is a cross-user
       # hand-off of executable code.
+      # A base's dir that is a symlink is refused before anything is written: nono resolves
+      # the link when it takes the grant, so a `~/.claude-sandbox -> ~/.claude` would hand
+      # ~/.claude to every claude session (install.sh refuses it too).
+      home.activation.aiSandboxBaseDirs =
+        lib.hm.dag.entryBefore ["writeBoundary"]
+        (lib.concatMapStringsSep "\n"
+          (d: ''
+            if [ -L "${d}" ]; then
+              errorEcho "ai-sandbox: ${d} is a symbolic link; make it a directory of its own (copy what you need into it, never link it): the sandbox would get read and write on the link's target"
+              exit 1
+            fi'')
+          (map baseDirAbs scfg.internal.baseDirs));
+
       home.activation.aiSandboxDirs =
         lib.hm.dag.entryAfter ["writeBoundary"]
         (lib.concatMapStringsSep "\n"

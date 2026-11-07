@@ -11,7 +11,7 @@
     }
   },
   "extends": [
-    "nolabs-ai/claude"
+    "ai-sandbox-claude"
   ],
   "filesystem": {
     "allow": [

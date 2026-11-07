@@ -73,6 +73,22 @@ in
         message = "render.command must print the alias string, wrapped with the isolation on and nono-only with it off";
       }
       {
+        # gitDirs take effect through the isolation's git layer only: render.command passes them
+        # with it on and throws (not drops them) with the isolation or its git layer off.
+        condition = let
+          args = {
+            command = "claude";
+            profile = "pi-claude";
+            gitDirs = ["/srv/b.git"];
+          };
+          render = c: builtins.tryEval (builtins.deepSeq (c.programs.aiSandbox.render.command args) true);
+        in
+          lib.hasInfix "--git-dir \"/srv/b.git\"" (h.programs.aiSandbox.render.command args)
+          && !(render (with_ {programs.aiSandbox.isolation.enable = false;})).success
+          && !(render (with_ {programs.aiSandbox.isolation.layers = ["pid" "tmp"];})).success;
+        message = "render.command with gitDirs must throw with the isolation or its git layer off";
+      }
+      {
         condition = aiFailedWith {} == [] && aiFailedWith {programs.aiSandbox.tmpdirFallback = "/var/lib/ai-tmp";} == [] && aiFailedWith {programs.aiSandbox.gpu.variants.claude_gpu = "agy";} == [];
         message = "the default fixture, a private fallback root and a variant of another harness must satisfy every module assertion";
       }
@@ -114,5 +130,16 @@ in
     ]
     ++ import ./profile-rows.nix {inherit lib helpers;} {
       home = h;
+      files = false;
+    }
+    # The same alias rows over a home with a variant with gitDirs (no `_nono` twin).
+    ++ import ./profile-rows.nix {inherit lib helpers;} {
+      home = with_ {
+        programs.aiSandbox.variants.cfg = {
+          harness = "claude";
+          suffix = "cfg";
+          gitDirs = ["$HOME/src/config.git"];
+        };
+      };
       files = false;
     })

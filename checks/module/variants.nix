@@ -64,6 +64,15 @@
     };
   };
   ofDisabled = aiFixtureWith ofDisabledModule;
+  gitVarModule = {
+    programs.aiSandbox.variants.dot = {
+      harness = "claude";
+      suffix = "dot";
+      allow = ["$HOME/src/dot.git"];
+      gitDirs = ["$HOME/src/dot.git" "/srv/b.git"];
+    };
+  };
+  gitVar = aiFixtureWith gitVarModule;
   # The gpu preset's leaves are defaults: a consumer renames one twin's suffix.
   gpuRenamed = emitted (aiFixtureWith {programs.aiSandbox.variants.claude_gpu.suffix = "mine";});
 in
@@ -198,5 +207,40 @@ in
     {
       condition = gpuRenamed ? claude-local-mine && !(gpuRenamed ? claude-local-gpu) && gpuRenamed ? opencode-claude-gpu;
       message = "the gpu preset's variant leaves are defaults a consumer can override (suffix)";
+    }
+    {
+      # gitDirs: the alias hands each to the wrapper (`--git-dir`, double-quoted so `$HOME`
+      # expands), names no `_nono` twin in the hint, and has none: nono alone would leave the
+      # git dir's hooks and config writable.
+      condition = let
+        a = gitVar.config.home.shellAliases;
+        profile = "claude-local-dot";
+      in
+        a.dot
+        == aiAliasString ["ai-sandbox-run" "--git-dir" "\"$HOME/src/dot.git\"" "--git-dir" "\"/srv/b.git\"" "--open-urls-profile" profile "--"] []
+        gitVar.config
+        "claude"
+        profile
+        && !(a ? dot_nono)
+        && a ? claude_nono
+        && aiFailedWith gitVarModule == [];
+      message = "a variant with gitDirs must pass them to ai-sandbox-run as --git-dir and get no _nono twin";
+    }
+    {
+      condition =
+        aiFailsWith "ai-sandbox: programs.aiSandbox.variants dot set gitDirs" (lib.recursiveUpdate gitVarModule {programs.aiSandbox.isolation.enable = false;})
+        && aiFailsWith "ai-sandbox: programs.aiSandbox.variants dot set gitDirs" (lib.recursiveUpdate gitVarModule {programs.aiSandbox.isolation.layers = ["pid" "tmp"];});
+      message = "gitDirs without the isolation, or without its git layer, must fail the variants module assertion";
+    }
+    {
+      condition = lib.all (d:
+        aiFailsWith "ai-sandbox: programs.aiSandbox.variants.<name>.gitDirs entries" {
+          programs.aiSandbox.variants.dot = {
+            harness = "claude";
+            suffix = "dot";
+            gitDirs = [d];
+          };
+        }) ["src/dot.git" "~/dot.git" "/srv/a'b" "/srv/$(id)" "$HOME/x\"y" "/srv/a\\b"];
+      message = "a gitDirs entry that is not absolute or $HOME/..., or holds a shell metacharacter, must fail the module assertion";
     }
   ]

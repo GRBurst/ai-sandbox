@@ -65,10 +65,10 @@
 #
 # nono does not fetch a pack that a profile names in `extends` (NONO_AUTO_MIGRATE
 # covers bare profile names only), so after every check and before the first
-# file is written, each registry pack an installed profile extends that nono
-# lacks is pulled at the version scripts/packs pins; a failed pull refuses the
-# install. Pulled packs are recorded ($XDG_DATA_HOME/ai-sandbox/packs, one per
-# line); `uninstall` removes exactly those (`nono remove`), never a pack nono
+# file is written, each registry pack an installed profile extends, or an
+# installed shipped base is made from (install/bases.json), that nono lacks is
+# pulled at the version scripts/packs pins; a failed pull refuses the install.
+# Pulled packs are recorded ($XDG_DATA_HOME/ai-sandbox/packs, one per line); `uninstall` removes exactly those (`nono remove`), never a pack nono
 # had before. A kill between a pull and its record leaves that pack unrecorded:
 # uninstall then keeps it (the README says so).
 set -euo pipefail
@@ -146,6 +146,8 @@ declare -a layer_names=()   # the registered layers, in registration order
 declare -A layer_dirs=()    # layer name -> directory
 declare -A profile_src=()   # profile file name -> the file copied to profile_dir
 declare -a cache_dirs=()    # the directories of install/dirs, resolved
+declare -a home_lines=()    # the lines of install/dirs below @HOME@ (the bases' dirs)
+declare -a base_dirs=()     # those resolved, when a base is installed
 declare -a services=()      # the services of SERVICES
 declare -a service_profiles=() # their profiles
 declare -a service_units=() # their unit files, for systemctl
@@ -155,6 +157,7 @@ declare -A service_files=() # unit or Caddyfile path -> its text with this insta
 declare -A pack_pin=()      # registry pack -> the version scripts/packs pins
 declare -A pack_recorded=() # the packs the installer pulled (the record)
 declare -A pack_installed=() # registry pack -> the version nono has installed
+declare -A base_pack=()     # shipped base (install/bases.json) -> the registry pack it is made from
 # a registry pack as nono reads one in `extends`: <namespace>/<name>[@<version>]
 pack_re='^([A-Za-z0-9_][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*)(@[A-Za-z0-9._+-]+)?$'
 staging=0                   # 1: put checks and queues, flush_puts writes
@@ -415,6 +418,11 @@ blocked_dir() {
 # be written; checked while staging, so a refusal comes before the first write.
 check_make_dirs() {
   local d b
+  # nono resolves a symlink when it takes the grant: a linked ~/.claude-sandbox
+  # would hand its target (~/.claude, say) to every claude session.
+  for d in "${base_dirs[@]}"; do
+    [ ! -L "$d" ] || die "$d is a symbolic link; make it a directory of its own (copy what you need into it, never link it): the sandbox would get read and write on the link's target"
+  done
   for d in "${cache_dirs[@]}" "${service_dirs[@]}"; do
     if [ -e "$d" ] || [ -L "$d" ]; then
       { [ -d "$d" ] && [ -O "$d" ]; } || die "cannot make the directory $d 0700: it exists and is not a directory of yours"
@@ -715,6 +723,36 @@ load_layers() {
   for name in "${layer_names[@]}"; do check_layer "$name" "${layer_dirs[$name]}"; done
 }
 
+# load_bases: install/bases.json (a shipped base -> the registry pack it is made
+# from) into base_pack; anything else, or a base profiles/ lacks, refuses the run
+# before anything changes.
+load_bases() {
+  local file=$root/install/bases.json list b p
+  base_pack=()
+  list=$(jq -r 'if type == "object" and all(.[]; type == "string") then to_entries[] | "\(.key) \(.value)" else error("not an object of strings") end' "$file" 2>/dev/null) ||
+    die "install/bases.json is not a JSON object of base names to registry packs"
+  while read -r b p; do
+    [ -n "$b" ] || continue
+    [[ $b =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $p =~ $pack_re && -z ${BASH_REMATCH[2]} ]] ||
+      die "install/bases.json: not a base name mapped to a <namespace>/<pack>: $b $p"
+    [ -f "$root/profiles/$b.json" ] || die "profiles/$b.json is missing (install/bases.json names it)"
+    base_pack[$b]=$p
+  done <<<"$list"
+}
+
+# install_bases: the shipped base of every profile in profile_src that extends
+# one (a layer's file of that name wins: it is there already).
+install_bases() {
+  local f ref
+  for f in "${!profile_src[@]}"; do
+    while IFS= read -r ref; do
+      if [ -n "${base_pack[$ref]+x}" ] && [ -z "${profile_src[$ref.json]+x}" ]; then
+        profile_src[$ref.json]=$root/profiles/$ref.json
+      fi
+    done < <(jq -r '.extends | if type == "array" then .[] else . end | strings' "${profile_src[$f]}")
+  done
+}
+
 # install_layers: every layer's profiles over the shipped ones, in registration
 # order (the later wins), and the record of the layers.
 install_layers() {
@@ -805,6 +843,7 @@ install_packs() {
     while IFS= read -r ref; do
       if [[ $ref =~ $pack_re && $ref != *.json ]]; then need[$ref]=$f; fi
     done < <(jq -r '.extends | if type == "array" then .[] else . end | strings' "${profile_src[$f]}")
+    if [ -n "${base_pack[${f%.json}]+x}" ]; then need[${base_pack[${f%.json}]}]=$f; fi
   done
   [ ${#need[@]} -gt 0 ] || return 0
   installed_packs "${tool[nono]}" ||
@@ -818,7 +857,7 @@ install_packs() {
         warn "the nono pack $key is at ${pack_installed[$key]}, not at $pin as scripts/packs pins; left as it is"
       fi
     elif [ -n "$pin" ]; then
-      say "pulling the nono pack $key@$pin (${need[$ref]} extends it)"
+      say "pulling the nono pack $key@$pin (${need[$ref]} needs it)"
       "${tool[nono]}" pull "$key@$pin" </dev/null ||
         die "could not pull the nono pack $key@$pin (see nono's message above; offline?); the install stopped before its first file. When online, run nono pull $key@$pin, or install again"
       pack_installed[$key]=$pin
@@ -887,9 +926,11 @@ resolve() {
   printf '%s' "$v"
 }
 
-# load_dirs: the directories of install/dirs (the per-command cache dirs) with
-# the XDG placeholders resolved, checked before anything is written. No harness
-# owns a line, so all are made whatever HARNESSES selects.
+# load_dirs: the directories of install/dirs (the per-command cache dirs, the
+# sandboxed Claude Code's config dir) with the placeholders resolved, checked
+# before anything is written. The cache dirs are made whatever HARNESSES
+# selects; the lines below @HOME@ are the shipped bases' dirs, which
+# add_base_dirs takes once install_bases knows whether a base is installed.
 load_dirs() {
   local line d n=0
   plain_dir "$cache_home" ||
@@ -897,10 +938,34 @@ load_dirs() {
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
     [ -n "$line" ] || continue
+    case $line in
+      @HOME@/*)
+        home_lines+=("$line")
+        continue
+        ;;
+    esac
     d=$(resolve "$line")
     plain_dir "$d" || die "install/dirs:$n: not an absolute plain path once resolved: $line"
     cache_dirs+=("$d")
   done <"$root/install/dirs"
+}
+
+# add_base_dirs: the @HOME@ lines of install/dirs, made (and a plain HOME
+# required) only when a shipped base is installed; run after install_bases.
+add_base_dirs() {
+  local b line d installed=0
+  for b in "${!base_pack[@]}"; do
+    if [ -n "${profile_src[$b.json]+x}" ]; then installed=1; fi
+  done
+  [ "$installed" = 1 ] || return 0
+  for line in "${home_lines[@]}"; do
+    plain_dir "$HOME" ||
+      die "HOME must be an absolute path of letters, digits and . _ + @ - (no . or .. segment) for the directory $line of install/dirs: $HOME"
+    d=$(resolve "$line")
+    plain_dir "$d" || die "install/dirs: not an absolute plain path once resolved: $line"
+    base_dirs+=("$d")
+    cache_dirs+=("$d")
+  done
 }
 
 # install_dirs: make the cache dirs and the services' data dirs, 0700. They are
@@ -1266,6 +1331,7 @@ do_install() {
   load_pack_record
   parse_services
   resolve_deps
+  load_bases
   check_harnesses
   load_layers
   load_dirs
@@ -1276,6 +1342,8 @@ do_install() {
   install_wrapper
   install_profiles
   install_layers
+  install_bases
+  add_base_dirs
   install_options
   copy_profiles
   install_shell

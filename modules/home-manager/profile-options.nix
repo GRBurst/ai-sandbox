@@ -5,7 +5,7 @@ import ./grants.nix {inherit lib;}
 // {
   pack = lib.mkOption {
     type = lib.types.str;
-    description = "The nono registry pack the profile extends: its single `extends` entry.";
+    description = "The nono registry pack the profile extends: its single `extends` entry; `nolabs-ai/claude` is re-based as the ai-sandbox base `ai-sandbox-claude`, which the profile extends instead.";
   };
   include = lib.mkOption {
     type = with lib.types; listOf str;

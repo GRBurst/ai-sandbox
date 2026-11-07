@@ -200,13 +200,27 @@
   in
     lib.attrNames s.harnessProfiles ++ lib.attrNames s.internal.variants;
 
-  # Alias name -> its nono-only string, derived from the options of `h`: the harness's
-  # command in the (variant's) profile, with the variant's own `nono` flags.
+  # The generated aliases that have a nono-only twin `<alias>_nono`: all but the variants with
+  # gitDirs, whose git dirs only the isolation binds read-only (nono alone would leave them
+  # writable).
+  aiTwinnedAliases = h: let
+    s = h.programs.aiSandbox;
+  in
+    lib.attrNames s.harnessProfiles ++ lib.attrNames (lib.filterAttrs (_: v: v.spec.gitDirs == []) s.internal.variants);
+
+  # Generated alias name -> its nono-only string, derived from the options of `h`: the harness's
+  # command in the (variant's) profile, with the variant's own `nono` flags. null for a variant
+  # with gitDirs (it has none), so a consumer comparing over aiGeneratedAliases fails its row
+  # instead of throwing on a missing attribute.
   aiExpectedNonoAliases = h: let
     s = h.programs.aiSandbox;
   in
     lib.mapAttrs (c: p: aiExpectedNonoAlias h c p) s.harnessProfiles
-    // lib.mapAttrs (_: v: aiAliasString [] v.spec.nonoArgs h v.command v.profile) s.internal.variants;
+    // lib.mapAttrs (_: v:
+      if v.spec.gitDirs == []
+      then aiAliasString [] v.spec.nonoArgs h v.command v.profile
+      else null)
+    s.internal.variants;
 
   # alias name -> the harness (key of `harnesses`) it borrows its spec from. Restated
   # literally rather than read back from the option: adding a GPU twin has to be
@@ -271,6 +285,21 @@
     pi-claude = "nolabs-ai/pi";
   };
 
+  # ai-sandbox's own bases -> the registry pack each re-bases: the pack's profile without its
+  # grants on the harness's own configuration (modules/home-manager/bases.nix). A base is
+  # emitted while a profile of its pack is, and extends `default`, as the pack does.
+  aiBasePack = {
+    ai-sandbox-claude = "nolabs-ai/claude";
+  };
+
+  # profile -> its single `extends` entry: its pack, or the ai-sandbox base of its pack.
+  # Restated literally, like aiPack: a profile that extends its pack again has to fail here.
+  aiBase =
+    aiPack
+    // {
+      claude-local = "ai-sandbox-claude";
+    };
+
   # IFD-free: this requires the profiles stay `.text = builtins.toJSON ...`.
   # Switching the emitter to pkgs.formats.json would make them `.source`, a
   # derivation path, and every assertion below would need import-from-derivation.
@@ -290,11 +319,11 @@
     ++ map (a: h.home.shellAliases.${a}) (lib.attrNames aiGpuVariants)
     ++ map (a: h.home.shellAliases.${a}) (lib.attrNames (removeAttrs h.programs.aiSandbox.internal.variants (lib.attrNames aiGpuVariants)));
 
-  # The nono-only twins `<alias>_nono` of every generated alias.
+  # The nono-only twins `<alias>_nono` of every twinned alias (aiTwinnedAliases).
   # `or ""`: a missing twin must fail the assertion that reads it, not abort
   # the whole check with a missing-attribute throw.
   aiNonoTwinsOf = h:
-    map (a: h.home.shellAliases."${a}_nono" or "") (aiGeneratedAliases h);
+    map (a: h.home.shellAliases."${a}_nono" or "") (aiTwinnedAliases h);
 
   # Every alias an interactive user can type: the wrapped aliases and their
   # nono-only twins. The shape invariants that do not depend on the wrapper

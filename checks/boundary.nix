@@ -5,7 +5,9 @@
 #       `programs.terminalKit`, `llm-agents`, `my.hm.`, `my.nixos.`), the state and options
 #       of a particular harness's own modules (`.pi/`, `.pi"`, `pi-web`, `pi-sessions`,
 #       `CLAUDE_CONFIG_DIR`, `programs.pi`, a prefix of every `programs.pi*` namespace) or a
-#       firewall setting (`networking.firewall`);
+#       firewall setting (`networking.firewall`). A token with an owner is allowed in that
+#       file only: `CLAUDE_CONFIG_DIR` in `modules/home-manager/bases.nix`, the claude base,
+#       which gives the sandboxed Claude Code a config dir of its own;
 #   (2) no non-comment line of a `.nix` file under `modules/` names the rendered directories
 #       (`profiles/`, `shell/`, `services/`, `services-nono/`, `sysctl/`, `install/` at the
 #       root: generated from the modules, never read by them). A relative path must resolve
@@ -38,6 +40,10 @@
     "programs.pi"
     "networking.firewall"
   ];
+  # token -> the one file that may name it
+  owners = {
+    CLAUDE_CONFIG_DIR = "modules/home-manager/bases.nix";
+  };
   rendered = ["profiles" "shell" "services" "services-nono" "sysctl" "install"];
 
   # Rule (3): the source without the rendered directories, its modules as the render's `self`.
@@ -63,9 +69,11 @@ in
     root=$(pwd)
     fail=0
     tokens=(${lib.concatMapStringsSep " " lib.escapeShellArg tokens})
+    declare -A owner=(${lib.concatStringsSep " " (lib.mapAttrsToList (t: f: "[${lib.escapeShellArg t}]=${lib.escapeShellArg f}") owners)})
     rendered=(${lib.concatStringsSep " " rendered})
     while IFS= read -r file; do
       for t in "''${tokens[@]}"; do
+        [ "''${owner[$t]-}" != "$file" ] || continue
         while IFS= read -r hit; do
           echo "boundary: $file:''${hit%%:*}: token '$t'" >&2
           fail=1
