@@ -19,6 +19,8 @@ fail() {
 work=$(mktemp -d)
 calls=$work/calls
 : >"$calls"
+nono_calls=$work/nono-calls
+: >"$nono_calls"
 
 # ---- stubs ---------------------------------------------------------------
 mkstub() { # mkstub DIR NAME BODY
@@ -27,7 +29,45 @@ mkstub() { # mkstub DIR NAME BODY
   chmod +x "$1/$2"
 }
 stubs=$work/stubs
-mkstub "$stubs" nono "echo \"nono \${NONO_STUB_VERSION:-99.0.0}\""
+# nono: `list --installed --json` prints its pack store, `pull <pack>@<version>` and
+# `remove <pack>` change it and are recorded in $nono_calls; anything else prints the
+# version. The store is $HOME.nono-packs (`<pack> <version>` lines), beside the home and
+# not in it, so a home an uninstall emptied stays empty. NONO_STUB_LIST_RC fails the
+# listing, NONO_STUB_LIST_ARRAY prints a listing whose packages are an array, and
+# NONO_STUB_REMOVE_FAIL refuses every remove; NONO_STUB_PULL_FAIL fails the pull of
+# that pack, `*` of every pack (offline).
+mkstub "$stubs" nono "$(
+  cat <<EOF
+store=\$HOME.nono-packs
+declare -A have=()
+if [ -f "\$store" ]; then while read -r p v; do have[\$p]=\$v; done <"\$store"; fi
+save() { local p; for p in "\${!have[@]}"; do printf '%s %s\n' "\$p" "\${have[\$p]}"; done >"\$store"; }
+case \${1-} in
+  list)
+    [ "\${NONO_STUB_LIST_RC:-0}" = 0 ] || { echo "nono: cannot read the lockfile" >&2; exit "\$NONO_STUB_LIST_RC"; }
+    [ -z "\${NONO_STUB_LIST_ARRAY-}" ] || { echo '{"lockfile_version":4,"packages":[]}'; exit 0; }
+    sep=
+    printf '{"lockfile_version":4,"packages":{'
+    for p in "\${!have[@]}"; do printf '%s"%s":{"version":"%s"}' "\$sep" "\$p" "\${have[\$p]}"; sep=,; done
+    printf '}}\n'
+    ;;
+  pull)
+    echo "nono \$*" >>$nono_calls
+    case \${NONO_STUB_PULL_FAIL-} in '*' | "\${2%@*}") echo "nono: registry unreachable" >&2; exit 1 ;; esac
+    have[\${2%@*}]=\${2#*@}
+    save
+    ;;
+  remove)
+    echo "nono \$*" >>$nono_calls
+    [ -z "\${NONO_STUB_REMOVE_FAIL-}" ] || { echo "nono: remove refused" >&2; exit 1; }
+    [ -n "\${have[\$2]+x}" ] || { echo "nono: package \$2 is not installed" >&2; exit 1; }
+    unset "have[\$2]"
+    save
+    ;;
+  *) echo "nono \${NONO_STUB_VERSION:-99.0.0}" ;;
+esac
+EOF
+)"
 mkstub "$stubs" bwrap "exit \${BWRAP_STUB_RC:-0}"
 mkstub "$stubs" caddy 'exit 0'
 mkstub "$stubs" xdg-open 'exit 0'
@@ -64,6 +104,7 @@ new_case() {
   out=$work/$c.out
   err=$work/$c.err
   : >"$calls"
+  : >"$nono_calls"
 }
 run_installer() { # run_installer ARGS...: status in $rc
   rc=0
@@ -908,7 +949,8 @@ check_units services-nono "$H/.config" "$stubs/nono"
 
 # a tool outside a bin/ directory: the unit names the tool itself
 svc_case services-nono-elsewhere
-mkstub "$work/$c/opt/nono-x" nono 'echo "nono 99.0.0"'
+mkdir -p "$work/$c/opt/nono-x"
+cp "$stubs/nono" "$work/$c/opt/nono-x/nono" # the installer also lists and pulls packs with it
 wo=$(without nono)
 svc_caddy=$wo/caddy
 P=$(path_of "$wo" "$JQ_BIN" "$GIT_BIN" "$SOCAT_BIN" "$UL_BIN" "$work/$c/opt/nono-x")
@@ -1409,6 +1451,162 @@ ENVV=(NONO_STUB_VERSION=weird)
 run_installer install
 expect_rc 0
 expect_err "cannot read the nono version"
+
+# ---- nono's registry packs -----------------------------------------------------
+# The shipped profiles extend registry packs that nono does not fetch by itself
+# (NONO_AUTO_MIGRATE skips a name with a slash), so the installer pulls each one
+# an installed profile extends and nono lacks, at the version of scripts/packs,
+# and records it; uninstall removes exactly the recorded packs.
+packs_of() { echo "$H/.local/share/ai-sandbox/packs"; }
+store_of() { echo "$H.nono-packs"; }
+pins() { # the `<pack>@<version>` lines of scripts/packs, sorted
+  local p v
+  while read -r p v; do
+    case $p in '' | '#'*) continue ;; esac
+    echo "$p@$v"
+  done <"$REPO/scripts/packs" | LC_ALL=C sort
+}
+pin_of() { pins | grep -F "$1@"; } # pin_of PACK
+nono_did() { sed -n "s/^nono $1 //p" "$nono_calls"; } # nono_did pull|remove: the arguments, in order
+[ "$(pins | wc -l)" = 4 ] || fail "scripts/packs does not pin the four packs: $(pins)"
+
+new_case packs-fresh
+run_installer install
+expect_rc 0
+[ "$(nono_did pull)" = "$(pins)" ] || fail "$c: pulled $(nono_did pull), want every pin: $(pins)"
+[ "$(cat "$(packs_of)")" = "$(pins | sed 's/@.*//')" ] || fail "$c: the record is $(cat "$(packs_of)")"
+! grep -qF "  $(packs_of)" "$(manifest_of)" || fail "$c: the pack record is in the manifest (a reinstall would drop it)"
+grep -qF "pulling the nono pack $(pin_of nolabs-ai/pi)" "$out" || fail "$c: the pull is not announced: $(cat "$out")"
+
+# only the packs of the selected harnesses
+new_case packs-subset
+ENVV=(HARNESSES=pi)
+run_installer install
+expect_rc 0
+[ "$(nono_did pull)" = "$(pin_of nolabs-ai/pi)" ] || fail "$c: pulled $(nono_did pull)"
+
+# a pack nono has, at any version, is left as it is and is not recorded
+new_case packs-present
+pins | sed 's/@/ /' >"$(store_of)"
+run_installer install
+expect_rc 0
+[ -z "$(nono_did pull)" ] || fail "$c: pulled $(nono_did pull) though nono had every pack"
+[ ! -e "$(packs_of)" ] || fail "$c: a pack record without a pull"
+new_case packs-other-version
+echo "nolabs-ai/opencode 9.9.9" >"$(store_of)"
+run_installer install
+expect_rc 0
+[ "$(nono_did pull)" = "$(pins | grep -vF nolabs-ai/opencode@)" ] || fail "$c: pulled $(nono_did pull)"
+expect_err "nolabs-ai/opencode is at 9.9.9"
+! grep -qxF nolabs-ai/opencode "$(packs_of)" || fail "$c: a pack the installer did not pull is recorded"
+
+# a reinstall pulls nothing and keeps the record
+new_case packs-reinstall
+run_installer install
+expect_rc 0
+cp "$(packs_of)" "$work/$c.packs"
+: >"$nono_calls"
+run_installer install
+expect_rc 0
+[ -z "$(nono_did pull)" ] || fail "$c: a reinstall pulled $(nono_did pull)"
+cmp -s "$work/$c.packs" "$(packs_of)" || fail "$c: a reinstall changed the record: $(cat "$(packs_of)")"
+
+# offline: refused before the first file, with the line to run later
+new_case packs-offline
+ENVV=(NONO_STUB_PULL_FAIL='*')
+run_installer install
+expect_rc 1
+expect_err "nono pull $(pins | head -n 1)"
+[ -z "$(find "$H" -mindepth 1 -print -quit)" ] || fail "$c: something was written: $(find "$H" -mindepth 1)"
+
+# a pull that fails after others: what was pulled is recorded, and uninstall removes it
+new_case packs-partial
+ENVV=(NONO_STUB_PULL_FAIL=nolabs-ai/opencode)
+run_installer install
+expect_rc 1
+expect_err "nono pull $(pin_of nolabs-ai/opencode)"
+[ ! -e "$(manifest_of)" ] || fail "$c: a manifest was written"
+[ "$(cat "$(packs_of)")" = "nolabs-ai/antigravity"$'\n'"nolabs-ai/claude" ] || fail "$c: the record is $(cat "$(packs_of)" 2>&1)"
+: >"$nono_calls"
+ENVV=()
+run_installer uninstall
+expect_rc 0
+[ "$(nono_did remove)" = "nolabs-ai/antigravity"$'\n'"nolabs-ai/claude" ] || fail "$c: removed $(nono_did remove)"
+[ -z "$(find "$H" -type f -print -quit)" ] || fail "$c: files stayed after uninstall: $(find "$H" -type f)"
+
+# uninstall removes the packs the installer pulled and no other
+new_case packs-uninstall
+echo "nolabs-ai/pi 0.0.1" >"$(store_of)"
+run_installer install
+expect_rc 0
+: >"$nono_calls"
+run_installer uninstall
+expect_rc 0
+[ "$(nono_did remove)" = "$(pins | grep -vF nolabs-ai/pi@ | sed 's/@.*//')" ] || fail "$c: removed $(nono_did remove)"
+[ "$(cat "$(store_of)")" = "nolabs-ai/pi 0.0.1" ] || fail "$c: the pack store is $(cat "$(store_of)")"
+[ -z "$(find "$H" -type f -print -quit)" ] || fail "$c: files stayed after uninstall: $(find "$H" -type f)"
+
+# without nono, uninstall removes the files and keeps the record; a later one removes the packs
+new_case packs-uninstall-without-nono
+run_installer install
+expect_rc 0
+P=$(path_of "$(without nono)")
+run_installer uninstall
+expect_rc 1
+expect_err "nono remove nolabs-ai/pi"
+[ ! -e "$(manifest_of)" ] || fail "$c: the manifest stayed"
+[ "$(cat "$(packs_of)")" = "$(pins | sed 's/@.*//')" ] || fail "$c: the record is $(cat "$(packs_of)" 2>&1)"
+P=$full_path
+: >"$nono_calls"
+run_installer uninstall
+expect_rc 0
+[ "$(nono_did remove)" = "$(pins | sed 's/@.*//')" ] || fail "$c: removed $(nono_did remove)"
+[ -z "$(find "$H" -type f -print -quit)" ] || fail "$c: files stayed after uninstall: $(find "$H" -type f)"
+
+# a recorded pack nono refuses to remove: uninstall removes the files, keeps the record and exits 1
+new_case packs-remove-fails
+run_installer install
+expect_rc 0
+ENVV=(NONO_STUB_REMOVE_FAIL=1)
+run_installer uninstall
+expect_rc 1
+expect_err "could not remove the nono pack"
+[ "$(cat "$(packs_of)")" = "$(pins | sed 's/@.*//')" ] || fail "$c: the record is $(cat "$(packs_of)" 2>&1)"
+[ ! -e "$(manifest_of)" ] || fail "$c: the manifest stayed"
+
+# nono's listing with packages that are not an object: refused before anything is written
+new_case packs-list-shape
+ENVV=(NONO_STUB_LIST_ARRAY=1)
+run_installer install
+expect_rc 1
+expect_err "cannot read the packs nono has installed"
+[ -z "$(find "$H" -mindepth 1 -print -quit)" ] || fail "$c: something was written: $(find "$H" -mindepth 1)"
+
+# a pack name a nono command would read as a flag is not a pack: scripts/packs refuses it
+new_case packs-bad-name
+own_repo
+printf -- '-evil/pack 1.0.0\n' >>"$R/scripts/packs"
+run_installer install
+expect_rc 1
+expect_err "scripts/packs:"
+expect_err "-evil/pack"
+
+# nono cannot list its packs: refused before anything is written
+new_case packs-list-fails
+ENVV=(NONO_STUB_LIST_RC=3)
+run_installer install
+expect_rc 1
+expect_err "nono list --installed --json"
+[ -z "$(find "$H" -mindepth 1 -print -quit)" ] || fail "$c: something was written: $(find "$H" -mindepth 1)"
+
+# a layer's pack that scripts/packs does not pin is not pulled: a warning names the pull
+new_case packs-layer-unpinned
+mkdir -p "$work/$c/l"
+printf '{"extends": ["example-ns/extra"]}\n' >"$work/$c/l/extra.json"
+run_installer install --layer extra="$work/$c/l"
+expect_rc 0
+expect_err "nono pull example-ns/extra"
+[ "$(nono_did pull)" = "$(pins)" ] || fail "$c: pulled $(nono_did pull)"
 
 # ---- put and the manifest ------------------------------------------------------
 # a script that sources the installer and calls its functions

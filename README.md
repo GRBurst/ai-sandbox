@@ -99,8 +99,15 @@ What `enable = true` gives you, with every default:
   `programs.aiSandbox.services.opencode-web.path = ["${pkgs.opencode}/bin" "${pkgs.git}/bin" "${pkgs.coreutils}/bin" "/usr/bin" "/bin"];`.
   `--strict-broker-path` refuses a `PATH` entry the sandbox can write;
   `~/.nix-profile/bin` is reached through links you own, so prefer store paths.
-- nono installs the registry packs the profiles extend on the first run,
-  without prompting (`autoInstallPacks`); that needs network access once.
+- The profiles extend nono registry packs (`nolabs-ai/claude`, `nolabs-ai/opencode`,
+  `nolabs-ai/pi`, `nolabs-ai/antigravity`), which nono must have before the
+  first run: nono does not fetch a pack that a profile names in `extends`
+  (`autoInstallPacks` sets `NONO_AUTO_MIGRATE`, which covers bare profile
+  names such as `--profile claude` only). Pull each once, at the version
+  pinned in `scripts/packs` of this repository (raw:
+  `https://raw.githubusercontent.com/GRBurst/ai-sandbox/<ref>/scripts/packs`),
+  for example `nono pull nolabs-ai/claude@0.1.4`. Without the pack an alias
+  fails with "base profile 'nolabs-ai/claude' not found".
 
 A project-directory variant is a harness profile with one more grant, with its
 own aliases:
@@ -167,6 +174,26 @@ HARNESSES=claude,pi GPU=0 scripts/install.sh install         # fewer harnesses, 
 SERVICES=opencode-web scripts/install.sh install             # also the opencode web UI units
 ```
 
+Install also runs `nono pull` for each registry pack the installed profiles extend
+that nono lacks (network access once; see the paragraph "The profiles extend nono registry packs" below). A pull wires
+the pack into your agent's own configuration. For the selected harnesses:
+
+- claude: `~/.claude/settings.json`, `~/.claude/plugins/known_marketplaces.json`,
+  `~/.claude/plugins/installed_plugins.json`, the hook scripts under
+  `~/.claude/plugins/marketplaces/nolabs-ai/` and a symlink under
+  `~/.claude/plugins/cache/nolabs-ai/`;
+- pi: `~/.pi/agent/settings.json` (its `packages` list);
+- opencode: symlinks `~/.config/opencode/plugins/nono-sandbox.ts` and
+  `~/.config/opencode/skills/nono-sandbox`;
+- antigravity: `~/.gemini/config/plugins/nono/`, `~/.gemini/config/import_manifest.json`
+  and the symlink `~/.agents/skills/nono-sandbox`;
+- every pack: a marker file in `~/.config/nono/profile-drafts/`.
+
+`SERVICES=opencode-web` pulls the opencode pack even without `opencode` in
+`HARNESSES`. `scripts/install.sh uninstall` runs `nono remove` for the packs it
+pulled, which undoes this wiring; one that nono refuses (for example, a wired
+file you edited) makes uninstall exit 1 and print the line to run.
+
 Options (environment variables of `scripts/install.sh install`):
 
 - `PREFIX` (default `~/.local`): the wrapper goes to `$PREFIX/bin/ai-sandbox-run`,
@@ -217,7 +244,9 @@ The installer never edits a shell rc file and never runs `sudo`, `systemctl` or
 `nix`. It checks everything before it writes the first file, so a refusal (a
 missing tool, a file that is not yours, a file or a directory you cannot write
 where a directory must go, a bad `SERVICE_PATH`, a value that looks like a
-placeholder, `@NAME@`) leaves nothing half installed; a failure it cannot
+placeholder, `@NAME@`) leaves nothing half installed; the one exception is a
+registry pack pull that fails after an earlier pull succeeded (the installer keeps
+the packs it pulled, recorded, and names the line to run); a failure it cannot
 foresee (a full disk) keeps a partial manifest, so `scripts/install.sh uninstall` still finds
 what was written. It prints what is left to you:
 
@@ -241,7 +270,7 @@ what was written. It prints what is left to you:
 
 Files that exist, are not in the manifest and differ are never overwritten (the
 install stops and names them); `scripts/install.sh uninstall` removes exactly the files of
-the manifest and leaves directories it created. It refuses, and tells you to
+the manifest and the nono packs the installer pulled (see below), and leaves directories it created. It refuses, and tells you to
 run `systemctl --user disable --now <units>` first, while a service unit it
 would remove is enabled (an uninstall, or a reinstall that leaves its service
 out, such as `SERVICES=default`; the message then names the `SERVICES` value
@@ -272,9 +301,28 @@ and `pi_notes` would run `ai-sandbox-run` and fail with "not found"; define the
 nono-only alias instead:
 `alias pi_notes="$(ai_sandbox_alias_string --nono-only pi pi-claude-notes)"`.
 
-nono's registry packs are fetched at run time: `aliases.sh` exports
-`NONO_AUTO_MIGRATE=1` so the first run installs them, or run
-`nono pull nolabs-ai/claude` (likewise `opencode`, `pi`, `antigravity`) yourself.
+The profiles extend nono registry packs, which nono does not fetch by itself:
+`NONO_AUTO_MIGRATE=1`, which `aliases.sh` exports, covers bare profile names,
+not a pack named in `extends`. So `scripts/install.sh install` pulls each pack
+an installed profile extends that nono does not have, at the version
+`scripts/packs` pins (`nono pull <pack>@<version>`: nono checks the pack's
+signature and wires it into the agent's own configuration, such as its hooks).
+That needs network access once. The pulls come after every check and before
+the first file; offline, the install stops and names the `nono pull` line to
+run later. A pack nono already has, at any version, is left as it is (a
+warning names a version other than the pinned one). The installer records the
+packs it pulled (`$XDG_DATA_HOME/ai-sandbox/packs`, also when a later pull
+fails), and `scripts/install.sh uninstall` removes exactly those with
+`nono remove`, which undoes their wiring; a reinstall with fewer harnesses
+keeps them until then. A pack that a layer's profile extends and
+`scripts/packs` does not pin is not pulled: a warning names the line.
+
+Trust: nono verifies each pack's Sigstore keyless signature and that its
+signer's GitHub owner is the pack's namespace (`nolabs-ai`). `scripts/packs`
+pins the version, not a content hash, so a same-version republish or a registry
+rollback is not caught. `NONO_REGISTRY` in your environment redirects the pulls
+(still signature-checked). A kill between a successful pull and the record
+write leaves that pack unrecorded: uninstall keeps it, and `nono remove` it by hand.
 
 What you do not get without Nix:
 
@@ -303,7 +351,7 @@ the Home Manager module's.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `autoInstallPacks` | `true` | Set `NONO_AUTO_MIGRATE`, so nono installs missing registry packs without prompting on the first run. |
+| `autoInstallPacks` | `true` | Set `NONO_AUTO_MIGRATE`, so nono installs the pack of a bare profile name (`nono run --profile claude`) without prompting; it does not fetch the packs the profiles extend: pull those once (see "Install with Nix"). |
 | `editor.appName` | `"nvf"` | The editor's `NVIM_APPNAME`; its XDG dirs are named after it. |
 | `editor.enable` | `false` | Grant the editor to every profile: its state and cache dirs and a per-profile runtime dir. |
 | `editor.readFile` | `[ ]` | Single files every profile may read while the editor grants are on (e.g. a theme mode file). |
@@ -439,6 +487,11 @@ The wrapper fails closed: if the isolation cannot be built (a distribution that
 restricts unprivileged user namespaces, for example), the agent does not start
 and the message names the `_nono` alias. The design is in
 `docs/specs/2026-09-26-sandbox-namespace-isolation-design.md`.
+
+Limit: the `claude` profiles inherit read and write on `$HOME/.claude` from the
+`nolabs-ai/claude` pack, so a session can edit the hooks that pack wired there,
+and a hook it plants would run unsandboxed the next time you start `claude`
+bare; a layer or variant only adds grants (`extends`), so it cannot narrow this.
 
 ## Checks
 

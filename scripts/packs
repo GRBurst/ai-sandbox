@@ -1,0 +1,11 @@
+# The nono registry packs the shipped profiles extend, pinned. nono does not
+# fetch a pack a profile names in `extends` (NONO_AUTO_MIGRATE covers bare
+# profile names only), so the packs must be in nono's pack store before the
+# first run: scripts/install.sh pulls a missing one at this version
+# (`nono pull <pack>@<version>`); with Nix, pull them once yourself.
+# The check extends-shape keeps this list and the packs of profiles/ equal.
+# <pack> <version>
+nolabs-ai/antigravity 0.3.4
+nolabs-ai/claude 0.1.4
+nolabs-ai/opencode 0.1.3
+nolabs-ai/pi 0.2.2

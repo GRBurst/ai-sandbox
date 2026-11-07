@@ -1,7 +1,7 @@
 # What the module does to the home itself: installs nono, the isolation wrapper and the harnesses'
-# own packages (`harnesses.<n>.package`, when set), lets nono install its packs
-# (`NONO_AUTO_MIGRATE`), and creates the directories nono grants but never creates (the
-# per-harness cache dirs, the per-profile editor runtime dirs).
+# own packages (`harnesses.<n>.package`, when set), sets `NONO_AUTO_MIGRATE` (bare profile names only;
+# the packs the profiles extend are pulled by hand, see the README), and creates the directories nono
+# grants but never creates (the per-harness cache dirs, the per-profile editor runtime dirs).
 {
   config,
   lib,

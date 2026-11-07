@@ -66,10 +66,11 @@ in {
       type = lib.types.bool;
       default = true;
       description = ''
-        Set NONO_AUTO_MIGRATE so nono installs missing registry packs
-        non-interactively. nono no longer ships built-in profiles, so without
-        this the first sandboxed run prompts before fetching from
-        registry.nono.sh.
+        Set NONO_AUTO_MIGRATE, so nono installs the registry pack of a bare
+        profile name (`nono run --profile claude`) without prompting. It does
+        not fetch a pack that a profile names in `extends`, as every generated
+        profile does: pull those once (`nono pull <pack>@<version>`, the
+        versions in `scripts/packs` of this repository).
       '';
     };
 

@@ -79,7 +79,8 @@ your own (such as `examples/without-nix/pi-claude-notes.json`) chains to one
 shipped profile, which extends the pack. The module checks assert the flat form
 on every emitted profile (the message "isolation invariant E"); `extends-shape`
 asserts one `extends` on every shipped and example profile, naming a pack for a
-shipped one and a shipped profile for an example.
+shipped one and a shipped profile for an example, and that `scripts/packs` pins
+exactly the packs the shipped profiles extend.
 
 ## Artifacts and their checks
 
@@ -92,6 +93,7 @@ shipped one and a shipped profile for an example.
 | `install/{harnesses.json,services.json,dirs}` | the fixture's harnesses, services and activation dirs | `render-install` |
 | `shell/variant.sh` | hand-written; the one re-implementation of the alias builder | `variant-sh` (byte for byte against the Nix strings, bash, zsh and dash) |
 | `shell/aliases.sh`, `scripts/install.sh`, `scripts/deps` | hand-written | `install-sh`, `readme-deps`, `shellcheck` |
+| `scripts/packs` | hand-written: the version of each registry pack the installer pulls | `extends-shape`, `install-sh` |
 | `packages/ai-sandbox-run/portable-preamble.sh` | hand-written template | `run-portable` (the wrapper suite against the installed wrapper), `preamble-vars` inside it |
 | `examples/existing-flake/` | hand-written | `existing-flake-example` |
 | `examples/without-nix/*.json` | hand-written | `extends-shape` |
@@ -142,7 +144,7 @@ What a user without Nix does not get, and what replaces it:
 | Render-time hooks (`editor.*`, `profileDefaults`, `packDefaults`) | `extends` user profiles (additive only); removing a shipped grant needs a copied profile under a new name |
 | Activation (`nonoProfileReclaim`, directories on every switch) | rerun the installer; the directories are made once at install |
 | Generations, atomic switch, rollback | `git pull && scripts/install.sh install` (the options and layers are recorded); `scripts/install.sh uninstall` |
-| A pinned closure (nono, bwrap, socat, caddy) | distribution versions with the minimums of the README; nono's packs are fetched at run time on both paths |
+| A pinned closure (nono, bwrap, socat, caddy) | distribution versions with the minimums of the README; nono's registry packs are outside the closure on both paths: the installer pulls the versions of `scripts/packs`, with Nix you pull them once |
 | The NixOS module's sysctl and its firewall comment | `sysctl/60-ai-sandbox.conf`, installed by hand with the printed `sudo` line |
 | fish aliases | bash and zsh |
 

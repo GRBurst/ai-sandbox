@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Install or remove the ai-sandbox without Nix. Needs only bash, coreutils and
 # the tools listed in scripts/deps; it never calls `nix` or `sudo` and never
-# edits shell rc files.
+# edits shell rc files. It pulls the nono registry packs the installed profiles
+# extend when nono lacks them (`nono pull`, needs network access once).
 #
 # usage: scripts/install.sh [install|uninstall] [--layer NAME=DIR]...
 #   env: PREFIX          install prefix (default ~/.local): an absolute path of
@@ -45,8 +46,9 @@
 #   exit: 0 done; 1 refused (missing tool, a target that is not ours and
 #         differs, a PREFIX, XDG directory, manifest or layer it cannot trust,
 #         a service that could not start, an enabled service unit it would
-#         remove: disable it first); 2 usage (also an option value it
-#         does not know)
+#         remove: disable it first, a nono pack it could not pull or list,
+#         or could not remove on uninstall, which still removes the files);
+#         2 usage (also an option value it does not know)
 #
 # The shell files go to $PREFIX/share/ai-sandbox/shell; the script prints the
 # line that sources its aliases.sh and never edits an rc file. It prints the
@@ -57,7 +59,18 @@
 # one `sha256  path` line per file) records what was written; `uninstall`
 # removes exactly those files (directories it created stay: they may hold data).
 # Files are written and removed only under the `roots` directories; a manifest
-# line that is not an absolute path under them refuses the whole run.
+# line that is not an absolute path under them refuses the whole run. The one
+# exception is the nono packs (below): `nono pull` and `nono remove` write and
+# undo their wiring in the agent configurations of your home.
+#
+# nono does not fetch a pack that a profile names in `extends` (NONO_AUTO_MIGRATE
+# covers bare profile names only), so after every check and before the first
+# file is written, each registry pack an installed profile extends that nono
+# lacks is pulled at the version scripts/packs pins; a failed pull refuses the
+# install. Pulled packs are recorded ($XDG_DATA_HOME/ai-sandbox/packs, one per
+# line); `uninstall` removes exactly those (`nono remove`), never a pack nono
+# had before. A kill between a pull and its record leaves that pack unrecorded:
+# uninstall then keeps it (the README says so).
 set -euo pipefail
 
 # First, so that an older bash reaches this message (associative arrays below)
@@ -108,6 +121,7 @@ data_dir=$data_home/ai-sandbox
 manifest=$data_dir/manifest
 layers_file=$data_dir/layers
 options_file=$data_dir/options
+packs_file=$data_dir/packs
 config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 config_home=${config_home%/}
 profile_dir=$config_home/nono/profiles
@@ -138,6 +152,11 @@ declare -a service_units=() # their unit files, for systemctl
 declare -a service_dirs=()  # their data dirs, resolved
 declare -a sysctl_lines=()  # the setting lines of sysctl/60-ai-sandbox.conf
 declare -A service_files=() # unit or Caddyfile path -> its text with this install's values
+declare -A pack_pin=()      # registry pack -> the version scripts/packs pins
+declare -A pack_recorded=() # the packs the installer pulled (the record)
+declare -A pack_installed=() # registry pack -> the version nono has installed
+# a registry pack as nono reads one in `extends`: <namespace>/<name>[@<version>]
+pack_re='^([A-Za-z0-9_][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*)(@[A-Za-z0-9._+-]+)?$'
 staging=0                   # 1: put checks and queues, flush_puts writes
 declare -a q_src=() q_dest=() q_mode=() q_hash=() # the queued puts
 declare -A queued=()        # the destinations of the queued puts
@@ -716,6 +735,127 @@ copy_profiles() {
   for f in "${!profile_src[@]}"; do put "${profile_src[$f]}" "$profile_dir/$f" 0644; done
 }
 
+# load_pins: scripts/packs into pack_pin; a line that is not `<pack> <version>`
+# refuses the run before anything changes.
+load_pins() {
+  local file=$root/scripts/packs line n=0 p v extra
+  pack_pin=()
+  [ -f "$file" ] || die "scripts/packs is missing"
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    read -r p v extra <<<"$line" || true
+    case $p in '' | '#'*) continue ;; esac
+    [[ $p =~ $pack_re && -z ${BASH_REMATCH[2]} && $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && -z $extra ]] ||
+      die "scripts/packs:$n: not a \`<namespace>/<pack> <version>\` line: $line"
+    pack_pin[$p]=$v
+  done <"$file"
+}
+
+# load_pack_record: the record of the packs the installer pulled into
+# pack_recorded; a line that is not a pack refuses the run before anything changes.
+load_pack_record() {
+  local line n=0
+  pack_recorded=()
+  [ -f "$packs_file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    [ -n "$line" ] || continue
+    [[ $line =~ $pack_re && -z ${BASH_REMATCH[2]} ]] ||
+      die "$packs_file:$n: not a <namespace>/<pack> line of a nono pack the installer pulled; nothing was changed: $line"
+    pack_recorded[$line]=1
+  done <"$packs_file"
+}
+
+# write_pack_record: pack_recorded into the record, sorted; none, no record.
+write_pack_record() {
+  local tmp
+  if [ ${#pack_recorded[@]} -eq 0 ]; then
+    rm -f -- "$packs_file"
+    return 0
+  fi
+  mkdir -p -- "$data_dir"
+  tmp=$(mktemp "$packs_file.XXXXXX")
+  printf '%s\n' "${!pack_recorded[@]}" | LC_ALL=C sort >"$tmp"
+  mv -f -- "$tmp" "$packs_file"
+}
+
+# installed_packs NONO: the packs nono has installed into pack_installed (pack ->
+# version), from `nono list --installed --json`; fails when that fails.
+installed_packs() {
+  local out list p v
+  pack_installed=()
+  out=$("$1" list --installed --json </dev/null) || return 1
+  list=$(jq -r '(.packages // {}) | if type == "object" then to_entries[] | "\(.key) \(.value.version)" else error("packages is not an object") end' <<<"$out") || return 1
+  while read -r p v; do
+    [ -z "$p" ] || pack_installed[$p]=$v
+  done <<<"$list"
+}
+
+# install_packs: every registry pack an installed profile extends must be in
+# nono's pack store before the first run. A missing one that scripts/packs pins
+# is pulled at that version (nono checks its signature) and recorded at once,
+# so uninstall finds it even when a later pull fails; one nono has, at any
+# version, is left as it is; a missing one without a pin (a layer's) gets a
+# warning. Runs after every check and before the first file is written: a
+# failed pull (offline) refuses the install.
+install_packs() {
+  local f ref key pin refs=()
+  local -A need=()
+  for f in "${!profile_src[@]}"; do
+    while IFS= read -r ref; do
+      if [[ $ref =~ $pack_re && $ref != *.json ]]; then need[$ref]=$f; fi
+    done < <(jq -r '.extends | if type == "array" then .[] else . end | strings' "${profile_src[$f]}")
+  done
+  [ ${#need[@]} -gt 0 ] || return 0
+  installed_packs "${tool[nono]}" ||
+    die "cannot read the packs nono has installed (nono list --installed --json failed); nothing was changed"
+  mapfile -t refs < <(printf '%s\n' "${!need[@]}" | LC_ALL=C sort)
+  for ref in "${refs[@]}"; do
+    [[ $ref =~ $pack_re ]]
+    key=${BASH_REMATCH[1]} pin=${pack_pin[${BASH_REMATCH[1]}]-}
+    if [ -n "${pack_installed[$key]+x}" ]; then
+      if [ -n "$pin" ] && [ "${pack_installed[$key]}" != "$pin" ]; then
+        warn "the nono pack $key is at ${pack_installed[$key]}, not at $pin as scripts/packs pins; left as it is"
+      fi
+    elif [ -n "$pin" ]; then
+      say "pulling the nono pack $key@$pin (${need[$ref]} extends it)"
+      "${tool[nono]}" pull "$key@$pin" </dev/null ||
+        die "could not pull the nono pack $key@$pin (see nono's message above; offline?); the install stopped before its first file. When online, run nono pull $key@$pin, or install again"
+      pack_installed[$key]=$pin
+      pack_recorded[$key]=1
+      write_pack_record
+    else
+      warn "${need[$ref]} extends the nono pack $ref, which nono lacks and scripts/packs does not pin; pull it yourself: nono pull $ref"
+    fi
+  done
+}
+
+# remove_packs: `nono remove` (which undoes the pack's wiring) for every pack of
+# the record. A pack nono no longer has leaves the record; one it cannot remove
+# (or no nono on PATH) stays there, and the line that removes it is printed.
+remove_packs() {
+  local nono p listed=0 recorded=() left=()
+  [ ${#pack_recorded[@]} -gt 0 ] || return 0
+  nono=$(command -v nono) || nono=
+  if [ -n "$nono" ] && installed_packs "$nono"; then listed=1; fi
+  mapfile -t recorded < <(printf '%s\n' "${!pack_recorded[@]}" | LC_ALL=C sort)
+  for p in "${recorded[@]}"; do
+    if [ "$listed" = 1 ] && [ -z "${pack_installed[$p]+x}" ]; then
+      unset "pack_recorded[$p]"
+    elif [ -n "$nono" ] && "$nono" remove "$p" </dev/null; then
+      say "removed the nono pack $p"
+      unset "pack_recorded[$p]"
+    else
+      left+=("$p")
+    fi
+  done
+  write_pack_record
+  [ ${#left[@]} -eq 0 ] && return 0
+  warn "could not remove the nono pack(s) the install pulled (${nono:-no nono on PATH}); they stay in $packs_file. Remove them with:"
+  printf '  nono remove %s\n' "${left[@]}" >&2
+  return 1
+}
+
 # install_shell: aliases.sh (its @SHELL_DIR@ the installed directory), variant.sh
 # and the alias files of the selected harnesses and variants, from aliases.d
 # with the isolation on, from aliases-nono.d with it off. No rc file is edited.
@@ -1121,7 +1261,9 @@ do_install() {
   reused_options
   check_options
   check_sysctl
+  load_pins
   load_manifest
+  load_pack_record
   parse_services
   resolve_deps
   check_harnesses
@@ -1142,6 +1284,7 @@ do_install() {
   stale=()
   for p in "${!old_manifest[@]}"; do [ -n "${queued[$p]+x}" ] || stale+=("$p"); done
   check_removable install "${stale[@]}"
+  install_packs
   flush_puts
   install_dirs
   remove_stale
@@ -1151,19 +1294,22 @@ do_install() {
 }
 
 do_uninstall() {
-  local p n=0
-  if [ ! -f "$manifest" ]; then
+  local p n=0 rc=0
+  if [ ! -f "$manifest" ] && [ ! -f "$packs_file" ]; then
     say "nothing to uninstall: no manifest at $manifest"
     return 0
   fi
   load_manifest
+  load_pack_record
   check_removable uninstall "${!old_manifest[@]}"
   for p in "${!old_manifest[@]}"; do
     remove_managed "$p" "${old_manifest[$p]}"
     n=$((n + 1))
   done
   rm -f -- "$manifest"
+  remove_packs || rc=1
   say "removed $n file(s); directories created by the install stay"
+  return $rc
 }
 
 main() {
