@@ -18,11 +18,19 @@
 
   # The namespace isolation around nono, as for the interactive aliases. No
   # --nono-alias (a unit has no nono-only twin) and no --open-urls-profile
-  # (services never get the URL relay).
+  # (services never get the URL relay). The service's gitDirs as `--git-dir`, `$HOME`
+  # expanded here: a unit has no shell.
   isolated = cfg.enable && cfg.isolation.enable;
-  wrap =
+  gitLayerOn = isolated && lib.elem "git" cfg.isolation.layers;
+  expandHome = d:
+    if lib.hasPrefix "$HOME/" d
+    then homeDir + lib.removePrefix "$HOME" d
+    else d;
+  wrap = s:
     lib.optionals isolated
-    ["${cfg.runPackage}/bin/ai-sandbox-run" "--"];
+    (["${cfg.runPackage}/bin/ai-sandbox-run"]
+      ++ lib.concatMap (d: ["--git-dir" (expandHome d)]) s.gitDirs
+      ++ ["--"]);
 
   # ExecStart is joined with spaces rather than lib.escapeShellArgs: systemd
   # splits on whitespace itself, no argument here contains one, and the
@@ -117,10 +125,27 @@
   # The backend unit Wants its proxy: PartOf on the proxy only propagates STOP, so
   # a switch that stops the backend leaves the proxy down unless the backend pulls
   # it back in.
+  #
+  # The unit names its profile but does not hold it, so a switch that changes only the profile
+  # (or the base it extends) would leave the running service on its old grants. The sha256 of
+  # each profile file of that chain that this module writes goes into `X-Restart-Triggers`:
+  # the unit file changes with them and Home Manager restarts the unit.
+  profileTriggers = name: let
+    file = n: config.xdg.configFile."nono/profiles/${n}.json" or null;
+    chain = n: let
+      f = file n;
+    in
+      lib.optionals (f != null)
+      (["${n}.json:${builtins.hashString "sha256" f.text}"]
+        ++ lib.concatMap chain (lib.toList ((builtins.fromJSON f.text).extends or [])));
+  in
+    chain name;
+
   mkSandboxedUnit = name: s: unit: u: {
     Unit =
       {Description = u.description;}
       // u.extraUnit
+      // {X-Restart-Triggers = (u.extraUnit.X-Restart-Triggers or []) ++ profileTriggers name;}
       // lib.optionalAttrs (s.proxy.enable && unit == s.backendUnit) {
         Wants = (u.extraUnit.Wants or []) ++ ["${proxyUnitOf name}.service"];
       };
@@ -140,7 +165,7 @@
             // lib.optionalAttrs isolated {AI_SANDBOX_RELAX = "";}
             // u.env);
         WorkingDirectory = s.workdir;
-        ExecStart = execLine (wrap
+        ExecStart = execLine (wrap s
           ++ [
             nono
             "run"
@@ -186,13 +211,30 @@
   goodWorkdir = d: builtins.match "/[^[:space:]$%\"'\\]*" d != null;
   goodDataDir = d: builtins.match "(/|[$]HOME/)[^$\"`\\]*" d != null;
   goodArg = a: builtins.match ".*[[:space:]].*" a == null;
+  goodGitDir = d: (lib.hasPrefix "/" d || lib.hasPrefix "$HOME/" d) && goodWorkdir (expandHome d);
 
   serviceAssertions = name: s: let
     opt = "programs.aiSandbox.services.${name}";
     badArgs = lib.filterAttrs (_: u: !(lib.all goodArg u.exec)) s.units;
     badDirs = lib.filter (d: !(goodDataDir d)) s.dataDirs;
+    badGitDirs = lib.filter (d: !(goodGitDir d)) s.gitDirs;
   in
     [
+      {
+        assertion = s.gitDirs == [] || gitLayerOn;
+        message = ''
+          ai-sandbox: ${opt}.gitDirs needs the namespace isolation's git layer, which alone holds
+          them read-only. Turn on isolation.enable with "git" in isolation.layers, or drop gitDirs.
+        '';
+      }
+      {
+        assertion = badGitDirs == [];
+        message = ''
+          ai-sandbox: ${opt}.gitDirs entries must be absolute or start with $HOME/, without
+          whitespace, `%`, quotes, backslashes or any other `$` (each is an ExecStart argument),
+          got ${builtins.toJSON badGitDirs}.
+        '';
+      }
       {
         assertion = !s.proxy.enable || isIPv4 s.proxy.listenAddress || isIPv6 s.proxy.listenAddress;
         message = ''
@@ -309,6 +351,21 @@
         default = name;
         description = "The unit that binds `backendPort`: the proxy is ordered against it and it Wants the proxy.";
       };
+      gitDirs = lib.mkOption {
+        type = with lib.types; listOf str;
+        default = [];
+        example = ["$HOME/projects/config.git"];
+        description = ''
+          Git directories below the service's grants whose hooks and config must not be
+          written from inside, such as a bare repository of your config files under `workdir`:
+          the isolation wrapper holds each one read-only as for a variant's `gitDirs` (`hooks/`,
+          `config`, `config.worktree`, `info/`, in-tree config includes, its linked worktrees'
+          `config.worktree`, `commondir` and `gitdir`); objects and refs stay writable. Grants
+          nothing. Absolute or `$HOME/...` (expanded when the unit is built). The wrapper refuses
+          to start, and the unit fails (fail closed), while one is missing, has no `hooks/` or
+          has a `commondir` file. Needs the namespace isolation with its `git` layer.
+        '';
+      };
       dataDirs = lib.mkOption {
         type = with lib.types; listOf str;
         default = [];
@@ -385,13 +442,13 @@ in {
           backendPort = 15435;
         }
         // {
-          # Reads Claude Code's OAuth credentials and refreshes them, like the opencode
-          # harness preset: rw on that one file, not on ~/.claude.
+          # Reaches Claude like the opencode harness preset: through the Claude Code config
+          # dir of opencode's own that its base sets and grants (shared with the harness, so
+          # one login serves both); nothing under ~/.claude.
           profile = defaults {
             pack = "nolabs-ai/opencode";
             exclude = ["user_caches_linux"];
             allow = [cfg.projectsDir];
-            allowFile = ["$HOME/.claude/.credentials.json"];
             readsSharedSkills = true;
           };
           units.opencode-web = defaults {

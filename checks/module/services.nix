@@ -74,6 +74,38 @@
     .config;
   ps = aiEmittedProfiles on;
 
+  # The unit file Home Manager writes (its store path), the restart triggers of a unit, and the
+  # sha256 of an emitted profile's text.
+  unitFile = h: n: h.xdg.configFile."systemd/user/${n}.service".source;
+  triggers = h: n: (units h).${n}.Unit.X-Restart-Triggers or [];
+  sha = h: n: builtins.hashString "sha256" h.xdg.configFile."nono/profiles/${n}.json".text;
+  # Something that leaves the opencode-web profile alone: a variant of another harness.
+  otherVariant =
+    (aiFixtureWith {
+      imports = [oc];
+      programs.aiSandbox.variants.pi_x = {
+        harness = "pi";
+        suffix = "x";
+        allow = ["$HOME/x"];
+      };
+    })
+    .config;
+
+  # The preset with git dirs the wrapper holds read-only, one `$HOME/`-relative.
+  gitDirs = ["$HOME/projects/config.git" "/srv/cfg.git"];
+  withGit = extra: {
+    imports = [oc];
+    programs.aiSandbox =
+      {services.opencode-web.gitDirs = gitDirs;}
+      // extra;
+  };
+  gitOn = (aiFixtureWith (withGit {})).config;
+  badGitDir = d:
+    aiFailsWith "ai-sandbox: programs.aiSandbox.services.opencode-web.gitDirs entries" {
+      imports = [oc];
+      programs.aiSandbox.services.opencode-web.gitDirs = [d];
+    };
+
   # A one-unit service without a proxy, named `name`, on ports `port` and `port + 1`.
   bare = name: port: {
     programs.aiSandbox.services.${name} = {
@@ -178,6 +210,40 @@ in
       message = "services: with isolation.enable = false the units start nono directly";
     }
     {
+      # A switch restarts a unit whose profile changed: the unit carries the sha256 of the
+      # profile it runs and of the ai-sandbox base that profile extends, so the unit file changes
+      # with either (Home Manager restarts a changed unit). Unchanged when the profile is.
+      condition =
+        triggers on "opencode-web"
+        == ["opencode-web.json:${sha on "opencode-web"}" "ai-sandbox-opencode.json:${sha on "ai-sandbox-opencode"}"]
+        && lib.all (u: triggers both u == ["svc.json:${sha both "svc"}" "ai-sandbox-claude.json:${sha both "ai-sandbox-claude"}"]) ["svc-daemon" "svc-server"]
+        && triggers on "opencode-web-proxy" == []
+        && unitFile on "opencode-web" != unitFile withDelta "opencode-web"
+        && unitFile on "opencode-web" == unitFile otherVariant "opencode-web";
+      message = "services: a sandboxed unit carries X-Restart-Triggers of its profile and base, so a profile change changes (and restarts) the unit";
+    }
+    {
+      # gitDirs: every sandboxed unit's wrapper holds them read-only (`--git-dir`, `$HOME`
+      # expanded: a unit has no shell); a service without them passes none (the rows above).
+      condition =
+        exec gitOn "opencode-web"
+        == "${gitOn.programs.aiSandbox.runPackage}/bin/ai-sandbox-run --git-dir ${home}/projects/config.git --git-dir /srv/cfg.git -- ${nono gitOn} run --profile opencode-web --workdir ${home}/projects --strict-broker-path --silent -- opencode serve --port 15435 --hostname 127.0.0.1"
+        && aiFailedWith (withGit {}) == []
+        && !(lib.hasInfix "--git-dir" (exec gitOn "opencode-web-proxy"));
+      message = "services: gitDirs reach every sandboxed unit's ai-sandbox-run as --git-dir, $HOME expanded";
+    }
+    {
+      condition =
+        aiFailsWith "ai-sandbox: programs.aiSandbox.services.opencode-web.gitDirs needs" (withGit {isolation.enable = false;})
+        && aiFailsWith "ai-sandbox: programs.aiSandbox.services.opencode-web.gitDirs needs" (withGit {isolation.layers = ["session"];});
+      message = "services: gitDirs without the isolation or its git layer must fail the module assertion";
+    }
+    {
+      # An ExecStart argument (joined with spaces, systemd expands `%` and `$`), absolute or `$HOME/`.
+      condition = lib.all badGitDir ["projects/config.git" "~/projects/config.git" "$XDG_DATA_HOME/x.git" "$HOME/my repo" "/srv/a%h" "/srv/a\"b" "/srv/a'b" "/srv/a\\b" "/srv/$x"];
+      message = "services: a gitDirs entry that is relative or holds whitespace, `%`, a quote, a backslash or another `$` must fail the module assertion";
+    }
+    {
       # The proxy: Caddy, not sandboxed, listening on the service's port and forwarding to its
       # backend; ordered against the backend unit, which pulls it in.
       condition = let
@@ -246,13 +312,14 @@ in
         p = ps.opencode-web;
       in
         p.extends
-        == ["nolabs-ai/opencode"]
+        == ["ai-sandbox-opencode"]
         && p.network.listen_port == [15435]
         && lib.elem "$HOME/projects" p.filesystem.allow
-        && lib.elem "$HOME/.claude/.credentials.json" p.filesystem.allow_file
+        # Claude through the base's own config dir: no grant under ~/.claude (the `bases` check)
+        && !(lib.elem "$HOME/.claude/.credentials.json" (p.filesystem.allow_file or []))
         && p.filesystem.read == ["$HOME/.agents/skills"]
         && lib.elem "opencode-web" on.programs.aiSandbox.internal.managedCommands;
-      message = "services: the opencode-web profile extends its own pack, grants the project root and binds exactly its backend port";
+      message = "services: the opencode-web profile extends the ai-sandbox base of its pack, grants the project root and binds exactly its backend port";
     }
     {
       # `network.listen_port` only in service profiles. The ai-sandbox bases are exempt:
@@ -314,7 +381,7 @@ in
         && lib.hasInfix ":16001 {" text
         && lib.hasInfix "reverse_proxy 127.0.0.1:16000 {" text
         && p.network.listen_port == [16000]
-        && p.extends == ["nolabs-ai/opencode"]
+        && p.extends == ["ai-sandbox-opencode"]
         && lib.hasPrefix "${fakeCaddy}/bin/caddy run --config " (exec overridden "opencode-web-proxy")
         && lib.hasPrefix "${fakeCaddy}/bin/caddy reload " (units overridden).opencode-web-proxy.Service.ExecReload;
       message = "services: overriding a preset's ports or proxy.package reaches its unit, Caddyfile and profile";

@@ -77,6 +77,9 @@
       # The real nono: the claude profiles deny every write to Claude Code's own config.
       claude-why = import ./claude-why.nix {inherit pkgs lib render;};
 
+      # The real nono: the opencode profiles reach neither Claude Code's nor Codex's config.
+      opencode-why = import ./opencode-why.nix {inherit pkgs lib render;};
+
       # The README dependency table and scripts/deps list the same tools.
       readme-deps = import ./readme-deps.nix {inherit pkgs lib self;};
 

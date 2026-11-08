@@ -3,4 +3,5 @@
 @XDG_CACHE_HOME@/opencode
 @XDG_CACHE_HOME@/opencode-web
 @XDG_CACHE_HOME@/pi
-@HOME@/.claude-sandbox
+@HOME@/.claude-sandbox ai-sandbox-claude
+@HOME@/.local/share/opencode/claude ai-sandbox-opencode

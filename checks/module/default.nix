@@ -211,7 +211,7 @@ in {
     mkAssertionCheck "ai-sandbox-profiles" ([
         {
           condition = lib.attrNames (aiEmittedProfiles h) == names;
-          message = "ai-sandbox alone must emit exactly the four harness profiles, the two GPU twins and the claude base (got: ${lib.concatStringsSep ", " (lib.attrNames (aiEmittedProfiles h))})";
+          message = "ai-sandbox alone must emit exactly the four harness profiles, the two GPU twins and the ai-sandbox bases (got: ${lib.concatStringsSep ", " (lib.attrNames (aiEmittedProfiles h))})";
         }
         {
           # nono rewrites a profile in place, which breaks HM's clobber check: every emitted

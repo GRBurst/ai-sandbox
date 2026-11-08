@@ -16,3 +16,5 @@ WorkingDirectory=@HOME@/projects
 [Unit]
 Description=opencode web UI server
 Wants=opencode-web-proxy.service
+X-Restart-Triggers=opencode-web.json:1a783902803fa62d59334356e03fcadc9fe8ed20e773333165867e42072d378f
+X-Restart-Triggers=ai-sandbox-opencode.json:e2916663fef57f9bed490459dafa50e5674fb67fa5da0ae9e762e7a693ebafd0

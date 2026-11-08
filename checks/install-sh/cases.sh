@@ -826,10 +826,11 @@ run_installer install
 expect_rc 0
 ! grep -qF "not on PATH" "$out" || fail "$c: a PATH hint while PREFIX/bin is on PATH"
 
-# install/dirs (the per-command cache dirs), resolved against the XDG
-# directories, created 0700; never in the manifest, kept by uninstall
+# install/dirs (the per-command cache dirs, the bases' dirs: the default install has every
+# base), resolved against the XDG directories, created 0700; never in the manifest, kept by
+# uninstall
 want_dirs() { # want_dirs CACHE: install/dirs resolved
-  sed -e "s|@XDG_CACHE_HOME@|$1|g" -e "s|@XDG_CONFIG_HOME@|$H/.config|g" -e "s|@HOME@|$H|g" "$REPO/install/dirs"
+  sed -e 's| [^ ]*$||' -e "s|@XDG_CACHE_HOME@|$1|g" -e "s|@XDG_CONFIG_HOME@|$H/.config|g" -e "s|@HOME@|$H|g" "$REPO/install/dirs"
 }
 check_dirs_made() { # check_dirs_made CACHE
   local d
@@ -890,7 +891,38 @@ ENVV=(HARNESSES=pi PREFIX="$work/$c/prefix" XDG_DATA_HOME="$work/$c/data" XDG_CO
 run_installer install
 expect_rc 0
 [ ! -e "$H/.claude-sandbox" ] || fail "$c: HARNESSES=pi made ~/.claude-sandbox"
+[ ! -e "$H/.local/share/opencode" ] || fail "$c: HARNESSES=pi made ~/.local/share/opencode"
 [ -d "$work/$c/cache/pi" ] || fail "$c: the cache dirs were not made"
+
+# ... and each base's dir only with that base
+new_case dirs-home-per-base
+ENVV=(HARNESSES=claude)
+run_installer install
+expect_rc 0
+[ -d "$H/.claude-sandbox" ] || fail "$c: HARNESSES=claude did not make ~/.claude-sandbox"
+[ ! -e "$H/.local/share/opencode/claude" ] || fail "$c: HARNESSES=claude made ~/.local/share/opencode/claude"
+new_case dirs-home-per-base-opencode
+ENVV=(HARNESSES=opencode)
+run_installer install
+expect_rc 0
+[ -d "$H/.local/share/opencode/claude" ] && [ "$(stat -c %a "$H/.local/share/opencode/claude")" = 700 ] ||
+  fail "$c: HARNESSES=opencode did not make ~/.local/share/opencode/claude 0700"
+[ ! -e "$H/.claude-sandbox" ] || fail "$c: HARNESSES=opencode made ~/.claude-sandbox"
+
+# a dir below @HOME@ names its base, one of install/bases.json; anything else refuses the run
+# before anything is written
+i=0
+for bad in '@HOME@/.x' '@HOME@/.x missing-base' '@HOME@/.x ai-sandbox-claude extra'; do
+  i=$((i + 1))
+  new_case "dirs-home-base-refused-$i"
+  own_repo
+  printf '%s\n' "$bad" >>"$R/install/dirs"
+  run_installer install
+  expect_rc 1
+  expect_err "install/dirs:"
+  expect_err "must be followed by its base of install/bases.json: $bad"
+  [ -z "$(find "$H" -mindepth 1 -print -quit)" ] || fail "$c: $bad wrote $(find "$H" -mindepth 1)"
+done
 
 # a shipped base's dir that is a symlink is refused: nono would grant its target
 new_case dirs-base-symlink-refused
@@ -903,6 +935,14 @@ expect_err "$H/.claude-sandbox is a symbolic link"
 ENVV=(HARNESSES=pi)
 run_installer install
 expect_rc 0
+new_case dirs-base-symlink-refused-opencode
+mkdir -p "$H/.claude" "$H/.local/share/opencode"
+ln -s ../../../.claude "$H/.local/share/opencode/claude"
+ENVV=(HARNESSES=opencode)
+run_installer install
+expect_rc 1
+expect_err "$H/.local/share/opencode/claude is a symbolic link"
+[ ! -e "$(manifest_of)" ] || fail "$c: the install went ahead"
 
 # ---- services and the sysctl line ----------------------------------------------
 # SERVICES: the units of install/services.json, from services/ (services-nono/
@@ -1682,6 +1722,48 @@ expect_rc 0
 run_installer uninstall
 expect_rc 0
 [ -z "$(find "$H" -type f -print -quit)" ] || fail "$c: files stayed after uninstall: $(find "$H" -type f)"
+
+# the same for the opencode base: with the opencode harness, its pack pulled, its Claude Code
+# config dir made 0700; gone with the last profile extending it, and by uninstall
+new_case bases-installed-opencode
+ENVV=(HARNESSES=opencode GPU=0)
+run_installer install
+expect_rc 0
+f=$(pdir)/ai-sandbox-opencode.json
+cmp -s "$REPO/profiles/ai-sandbox-opencode.json" "$f" || fail "$c: $f is not a copy of profiles/ai-sandbox-opencode.json"
+grep -qxF "$(sha256sum <"$f" | cut -d' ' -f1)  $f" "$(manifest_of)" || fail "$c: $f is not in the manifest"
+[ ! -e "$(pdir)/ai-sandbox-claude.json" ] || fail "$c: HARNESSES=opencode installed the claude base"
+nono_did pull | grep -qxF "$(pin_of nolabs-ai/opencode)" || fail "$c: the pack of the base was not pulled: $(nono_did pull)"
+grep -qF "pulling the nono pack $(pin_of nolabs-ai/opencode) (ai-sandbox-opencode.json needs it)" "$out" || fail "$c: the pull is not announced: $(cat "$out")"
+[ -d "$H/.local/share/opencode/claude" ] && [ "$(stat -c %a "$H/.local/share/opencode/claude")" = 700 ] ||
+  fail "$c: ~/.local/share/opencode/claude is not a 0700 directory"
+ENVV=(HARNESSES=pi)
+run_installer install
+expect_rc 0
+[ ! -e "$f" ] || fail "$c: HARNESSES=pi left the base"
+! grep -qF "  $f" "$(manifest_of)" || fail "$c: the base is still in the manifest"
+ENVV=(HARNESSES=opencode GPU=0)
+run_installer install
+expect_rc 0
+run_installer uninstall
+expect_rc 0
+[ -z "$(find "$H" -type f -print -quit)" ] || fail "$c: files stayed after uninstall: $(find "$H" -type f)"
+
+# a service alone needs its base: SERVICES=opencode-web without the opencode harness installs
+# ai-sandbox-opencode, pulls its pack and makes its dir
+svc_case bases-service-only
+ENVV+=(HARNESSES=claude)
+run_installer install
+expect_rc 0
+f=$(pdir)/ai-sandbox-opencode.json
+[ ! -e "$(pdir)/opencode-claude.json" ] || fail "$c: HARNESSES=claude installed the opencode harness's profile"
+cmp -s "$REPO/profiles/ai-sandbox-opencode.json" "$f" || fail "$c: the service did not bring its base $f"
+grep -qF "  $f" "$(manifest_of)" || fail "$c: $f is not in the manifest"
+nono_did pull | grep -qxF "$(pin_of nolabs-ai/opencode)" || fail "$c: the pack of the base was not pulled: $(nono_did pull)"
+[ -d "$H/.local/share/opencode/claude" ] || fail "$c: ~/.local/share/opencode/claude was not made"
+run_installer uninstall
+expect_rc 0
+[ ! -e "$f" ] || fail "$c: uninstall left the base"
 
 # a layer's base wins over the shipped one, like any profile, and its pack is still pulled
 new_case bases-layer

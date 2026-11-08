@@ -1,3 +1,4 @@
 {
-  "ai-sandbox-claude": "nolabs-ai/claude"
+  "ai-sandbox-claude": "nolabs-ai/claude",
+  "ai-sandbox-opencode": "nolabs-ai/opencode"
 }

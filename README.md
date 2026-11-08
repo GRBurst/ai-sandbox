@@ -20,7 +20,7 @@ from them (`profiles/`, `shell/`, `sysctl/`, `services/`, `services-nono/`,
 - `packages.<system>.ai-sandbox-run`: the isolation wrapper (bubblewrap around nono).
 - `checks.<system>`: `formatting`, `leaks`, `readme-options`, `readme-sections`, `ai-sandbox-run`,
   `shellcheck`, `actionlint`, `run-portable`, `install-sh`, `readme-deps`, `doc-refs`,
-  `boundary`, `nixos-output`, `render-profiles`, `render-aliases`, `render-units`, `render-sysctl`, `render-install`, `variant-sh`, `extends-shape`, `packs-pins`, `packs-activation`, `vendored-packs`, `claude-why`, `existing-flake-example`;
+  `boundary`, `nixos-output`, `render-profiles`, `render-aliases`, `render-units`, `render-sysctl`, `render-install`, `variant-sh`, `extends-shape`, `packs-pins`, `packs-activation`, `vendored-packs`, `claude-why`, `opencode-why`, `existing-flake-example`;
   the module checks (`checks/module`) `fixtures`, `isolation`, `profiles`, `aliases`,
   `home`, `services`, `variants`, `harnesses`, `profile-unit`, `bases`, `nixos`.
 - `apps.<system>.render`: `nix run .#render` from the checkout writes the generated files for use
@@ -99,9 +99,18 @@ What `enable = true` gives you, with every default:
   `programs.aiSandbox.services.opencode-web.path = ["${pkgs.opencode}/bin" "${pkgs.git}/bin" "${pkgs.coreutils}/bin" "/usr/bin" "/bin"];`.
   `--strict-broker-path` refuses a `PATH` entry the sandbox can write;
   `~/.nix-profile/bin` is reached through links you own, so prefer store paths.
+  A switch that changes a service's profile, or the ai-sandbox base it
+  extends, restarts the service's units: each carries the profiles' hashes as
+  `X-Restart-Triggers`, so its unit file changes with them. The units work in
+  `projectsDir` (`~/projects`) with read and write, so the `.git` of every
+  repository below it is writable from inside, as for any agent you start
+  there; list a repository whose hooks and config must stay out of reach (a
+  bare repository of your config files, say) in `services.<name>.gitDirs`
+  (see [Extra git directories](#extra-git-directories)).
 - The profiles extend nono registry packs (`nolabs-ai/claude`, `nolabs-ai/opencode`,
-  `nolabs-ai/pi`, `nolabs-ai/antigravity`), which nono must have before the
-  first run: nono does not fetch a pack that a profile names in `extends`
+  `nolabs-ai/pi`, `nolabs-ai/antigravity`; the claude and opencode ones
+  through the ai-sandbox bases, which load the pack's hook and plugin), which
+  nono must have before the first run: nono does not fetch a pack that a profile names in `extends`
   (`autoInstallPacks` sets `NONO_AUTO_MIGRATE`, which covers bare profile
   names such as `--profile claude` only). Pull each once, at the version
   pinned in `scripts/packs` of this repository (raw:
@@ -114,6 +123,10 @@ What `enable = true` gives you, with every default:
 - The sandboxed Claude has its own configuration directory, `~/.claude-sandbox`
   (see "The sandboxed Claude's own directory" under "Isolation"): log in once
   inside the sandbox.
+- The sandboxed opencode reaches Claude through a Claude Code directory of its
+  own, `~/.local/share/opencode/claude`, and gets nothing of `~/.claude` or
+  `~/.codex` (see "opencode's own Claude directory" under "Isolation"): log in
+  once inside its sandbox.
 
 A project-directory variant is a harness profile with one more grant, with its
 own aliases:
@@ -196,8 +209,10 @@ the pack into your agent's own configuration. For the selected harnesses:
 - every pack: a marker file in `~/.config/nono/profile-drafts/`.
 
 The claude wiring serves the `claude` you start without the sandbox; the
-sandboxed one has its own directory, `~/.claude-sandbox`, which install creates
-(see "The sandboxed Claude's own directory" under "Isolation").
+sandboxed one has its own directory, `~/.claude-sandbox`, and the sandboxed
+opencode reaches Claude through `~/.local/share/opencode/claude`; install
+creates each with the profiles that use it (see "The sandboxed Claude's own
+directory" and "opencode's own Claude directory" under "Isolation").
 
 `SERVICES=opencode-web` pulls the opencode pack even without `opencode` in
 `HARNESSES`. `scripts/install.sh uninstall` runs `nono remove` for the packs it
@@ -236,7 +251,8 @@ Options (environment variables of `scripts/install.sh install`):
   profiles go to `$XDG_CONFIG_HOME/nono/profiles/`, the units to
   `$XDG_CONFIG_HOME/systemd/user/`, the manifest to `$XDG_DATA_HOME/ai-sandbox/`,
   and the per-command cache directories (made `0700`) under `$XDG_CACHE_HOME`;
-  the sandboxed Claude's own directory is `$HOME/.claude-sandbox` (also `0700`).
+  the bases' own directories are `$HOME/.claude-sandbox` (claude) and
+  `$HOME/.local/share/opencode/claude` (opencode), also `0700`.
   All of them, and `PREFIX`, must be absolute paths of letters, digits and
   `. _ + @ -` only.
 
@@ -318,11 +334,12 @@ not a pack named in `extends`. So `scripts/install.sh install` pulls each pack
 an installed profile extends that nono does not have, at the version
 `scripts/packs` pins (`nono pull <pack>@<version>`: nono checks the pack's
 signature and wires it into the agent's own configuration, such as its hooks).
-The `claude` profiles extend the shipped base `ai-sandbox-claude` instead of
-the pack (`install/bases.json` maps each shipped base to the pack it re-bases):
-the installer installs that base with any profile that extends it, unless a
-layer provides a profile of that name, and pulls its pack, whose hook and nono
-plugin the base uses.
+The `claude` and `opencode` profiles extend the shipped bases
+`ai-sandbox-claude` and `ai-sandbox-opencode` instead of the packs
+(`install/bases.json` maps each shipped base to the pack it re-bases): the
+installer installs a base with any profile that extends it (a service's too),
+unless a layer provides a profile of that name, and pulls its pack, whose hook
+and nono plugin the base uses.
 That needs network access once. The pulls come after every check and before
 the first file; offline, the install stops and names the `nono pull` line to
 run later. A pack nono already has, at any version, is left as it is (a
@@ -385,7 +402,7 @@ the Home Manager module's.
 | `harnesses.<name>.enable` | `true` | Generate this harness's profile and aliases. |
 | `harnesses.<name>.exclude` | `[ ]` | `groups.exclude`: inherited groups unrelated to what the agent needs. |
 | `harnesses.<name>.include` | `[ ]` | `groups.include` for packs whose own group list is incomplete on NixOS. |
-| `harnesses.<name>.pack` | — | The nono registry pack the profile extends (its single `extends` entry); the presets set it; `nolabs-ai/claude` is re-based as `ai-sandbox-claude`, which the profile extends instead. |
+| `harnesses.<name>.pack` | — | The nono registry pack the profile extends (its single `extends` entry); the presets set it; `nolabs-ai/claude` and `nolabs-ai/opencode` are re-based as `ai-sandbox-claude` and `ai-sandbox-opencode`, which the profile extends instead. |
 | `harnesses.<name>.package` | `null` | The harness's CLI, installed while the harness and the module are on; must provide `bin/<name>`. `null` installs nothing. |
 | `harnesses.<name>.profileName` | — | Name of the generated nono profile; the presets set it. |
 | `harnesses.<name>.read` | `[ ]` | Read-only paths. |
@@ -416,6 +433,7 @@ the Home Manager module's.
 | `services.<name>.backendUnit` | `"<name>"` | The unit that binds `backendPort`; the proxy is ordered against it. |
 | `services.<name>.dataDirs` | `[ ]` | Absolute dirs created 0700 at activation (nono drops a grant whose path does not exist). |
 | `services.<name>.enable` | `false` | Run the service: its sandboxed systemd user units and, with `proxy.enable`, the proxy. |
+| `services.<name>.gitDirs` | `[ ]` | Git dirs below the service's grants whose hooks, config and `info/` the isolation holds read-only (`--git-dir`), as a variant's `gitDirs`. Absolute or `$HOME/...`; grants nothing; needs the isolation's `git` layer; a missing one fails the units. See [Extra git directories](#extra-git-directories). |
 | `services.<name>.listenPort` | — | Port the proxy listens on, the one a browser connects to; never opened in a firewall by this module. |
 | `services.<name>.path` | the NixOS user `PATH` | `PATH` of the sandboxed units; must contain nothing the sandbox can write. |
 | `services.<name>.profile.allow` | `[ ]` | Read+write paths. |
@@ -424,7 +442,7 @@ the Home Manager module's.
 | `services.<name>.profile.denyVars` | `[ "WAYLAND_DISPLAY" "DISPLAY" ]` | Variables stripped, so the harness copies through the terminal (OSC 52). |
 | `services.<name>.profile.exclude` | `[ ]` | `groups.exclude`: inherited groups unrelated to what the agent needs. |
 | `services.<name>.profile.include` | `[ ]` | `groups.include` for packs whose own group list is incomplete on NixOS. |
-| `services.<name>.profile.pack` | — | The nono registry pack the service's profile extends (its single `extends` entry); `nolabs-ai/claude` is re-based as `ai-sandbox-claude`. |
+| `services.<name>.profile.pack` | — | The nono registry pack the service's profile extends (its single `extends` entry); `nolabs-ai/claude` and `nolabs-ai/opencode` are re-based as `ai-sandbox-claude` and `ai-sandbox-opencode`. |
 | `services.<name>.profile.read` | `[ ]` | Read-only paths. |
 | `services.<name>.profile.readFile` | `[ ]` | Read-only single files. |
 | `services.<name>.profile.readsSharedSkills` | `false` | Add a read grant on `sharedSkillsDir`. |
@@ -536,6 +554,22 @@ no `_nono` twin, the module refuses `gitDirs` without the `git` layer, and
 `shell/variant.sh` has no `gitDirs`; pass `--git-dir DIR` to `ai-sandbox-run`
 in an alias of your own.
 
+A service takes the same list, for a repository inside its working tree
+(`projectsDir`, which it may write):
+
+```nix
+programs.aiSandbox.services.opencode-web.gitDirs = [ "$HOME/projects/config.git" ];
+```
+
+Its units then start `ai-sandbox-run --git-dir <dir> -- nono run ...` (`$HOME`
+expanded when the unit is built: a unit has no shell). The wrapper's refusals
+are the same, and they fail closed: while the directory is missing, has no
+`hooks/` or has a `commondir` file, the unit does not start (the opencode-web
+preset retries every 5 seconds). The service's environment empties
+`AI_SANDBOX_RELAX`, so nothing relaxes it. Without Nix the installed units take
+no `gitDirs`; add `--git-dir DIR` before the `--` of their `ExecStart` in a
+drop-in of your own.
+
 The sandboxed Claude's own directory: the `claude` profiles (and their GPU
 twins and variants) extend `ai-sandbox-claude`, not the `nolabs-ai/claude`
 pack. That base is the pack's own profile at the version `scripts/packs` pins,
@@ -569,14 +603,62 @@ whole directory, and that write would also let a session replace `settings.json`
   runs outside the sandbox. List that directory in the variant's `gitDirs`
   ([Extra git directories](#extra-git-directories)).
 
-Limit: the `opencode` profiles inherit read and write on `$HOME/.claude` from
-the `nolabs-ai/opencode` pack, so an opencode session can edit the hooks the
-claude pack wired there, and a hook it plants would run unsandboxed the next time
-you start `claude` bare; a layer or variant only adds grants (`extends`), so it
-cannot narrow this.
+opencode's own Claude directory: the `opencode` profiles (`opencode`,
+`opencode_gpu`, every variant on the opencode harness and the `opencode-web`
+service) extend `ai-sandbox-opencode`, not the `nolabs-ai/opencode` pack. That
+base is the pack's own profile, copied and checked like the claude one, without
+the pack's read and write on `~/.claude` and `~/.codex`, the configuration of
+Claude Code and of Codex, which run outside the sandbox. So an opencode session
+can neither read nor edit their settings, hooks, plugins or credentials, nor
+`~/.claude-sandbox`. opencode reaches Claude through Claude Code's login (a
+plugin such as `opencode-claude-auth` reads it, renews it and writes it back,
+or runs `claude` to renew it): the base sets `CLAUDE_CONFIG_DIR` to
+`~/.local/share/opencode/claude`, inside opencode's own data directory, which
+the pack grants already.
+
+- First run: log in once inside the opencode sandbox, the way the `opencode`
+  alias starts it, with `claude` in place of `opencode` (Claude Code must be on
+  the `PATH`):
+  `TMPDIR="${TMPDIR:-/run/user/$UID}/opencode/tmp" sh -c 'mkdir -p -m 700 "$TMPDIR" && exec ai-sandbox-run -- nono run --profile opencode-claude --allow-cwd -- claude auth login'`
+  (`nono run ...` alone with `ISOLATION=0`), from a scratch directory: like the
+  alias it grants its working directory. Open the URL it prints in your
+  browser and paste the code the page shows.
+- One login for all of them: `opencode`, `opencode_gpu`, the variants and
+  `opencode-web` share the directory, and the widest of them sets the reach of
+  all (as for claude). It is not the login of your bare `claude`, nor of the
+  sandboxed one in `~/.claude-sandbox`.
+- Never start `claude` outside the sandbox with `CLAUDE_CONFIG_DIR` pointing at
+  `~/.local/share/opencode/claude`, and do not copy your `~/.claude` login into
+  it; copy, never symlink (activation and the installer refuse a symbolic link).
+- opencode starts without what it reads from `~/.claude` (`CLAUDE.md`, skills,
+  the IDE lock files); the shared skills come from `~/.agents/skills`.
 
 ### Known limitations
 
+- opencode's own directories (`~/.config/opencode`, `~/.opencode`,
+  `~/.local/share/opencode`, `~/.cache/opencode`, `~/.local/state/opencode`)
+  stay writable for the opencode profiles, as the pack grants them: plugins,
+  MCP servers or commands a session writes there run in the next opencode
+  session, and in an opencode you start outside the sandbox. Start opencode
+  through its aliases only. `~/.npm` stays writable too (the pack's grant), and
+  an `npx` you run outside the sandbox runs what its cache holds.
+- A `setVars.CLAUDE_CONFIG_DIR` on an opencode harness, variant or service
+  silently replaces the base's directory (child-wins `set_vars`, as below).
+- An opencode session can replace `~/.local/share/opencode/claude`, which lies
+  in its writable data directory, by a symbolic link (an agent "sharing your
+  login" with `ln -s ~/.claude ...`, say) or a file. No grant follows the link
+  (the base grants nothing of its own there, and Landlock resolves the link to
+  a target it does not grant), but the next activation stops with the
+  "symbolic link" message, or fails to make the directory, and the installer
+  refuses, as for a linked `~/.claude-sandbox`: one rule for every base's
+  directory. Remove the link or file (`rm ~/.local/share/opencode/claude`) and
+  switch again; then log in again inside the sandbox.
+- A service's working tree (`projectsDir`) is writable for its units, and so is
+  the `.git` of every repository below it: a session can write hooks or config
+  there that git runs outside the sandbox the next time you use that
+  repository. The `git` layer holds only the working tree's own `.git` and the
+  service's `gitDirs`; list the repositories you run git in unsandboxed, or
+  narrow `projectsDir`.
 - A `setVars.CLAUDE_CONFIG_DIR` or `setVars.CLAUDE_CODE_PLUGIN_DIRS` on a claude
   harness or variant silently replaces the base's value (nono's child-wins
   `set_vars`): the first undoes the separate config dir (the grants still deny
@@ -584,8 +666,10 @@ cannot narrow this.
 - Claude Code's IDE integration (`/ide`) does not work inside: it looks for the
   IDE's lockfiles in `~/.claude/ide`, which the sandbox denies (they carry the
   IDE's token, so do not grant it).
-- Starting a `claude` alias from inside `~/.claude` grants it read and write
-  after all: `--allow-cwd` grants the working directory.
+- Starting a `claude` alias from inside `~/.claude`, or an `opencode` alias
+  (or the opencode login one-liner) from inside `~/.claude` or `~/.codex`,
+  grants it read and write there after all: `--allow-cwd` grants the working
+  directory. Start them in a project, or the one-liner in a scratch directory.
 - A session can rename the project's `.git` (or a `gitDirs` directory whose
   parent it may write) and put a new one in its place; the read-only binds
   stay on the renamed directory.
@@ -618,7 +702,9 @@ Nix).
 
 ## Licence
 
-MIT, see `LICENSE`. Except the vendored `nolabs-ai/claude` profile
-(`modules/home-manager/vendor/nolabs-ai-claude.policy.json`) and the base
-derived from it (`profiles/ai-sandbox-claude.json`): Apache-2.0, by nolabs-ai;
-source, licence text and changes in `modules/home-manager/vendor/`.
+MIT, see `LICENSE`. Except the vendored `nolabs-ai/claude` and
+`nolabs-ai/opencode` profiles
+(`modules/home-manager/vendor/nolabs-ai-{claude,opencode}.policy.json`) and
+the bases derived from them (`profiles/ai-sandbox-{claude,opencode}.json`):
+Apache-2.0, by nolabs-ai; source, licence text and changes in
+`modules/home-manager/vendor/`.

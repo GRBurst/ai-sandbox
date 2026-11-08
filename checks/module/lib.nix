@@ -290,6 +290,7 @@
   # emitted while a profile of its pack is, and extends `default`, as the pack does.
   aiBasePack = {
     ai-sandbox-claude = "nolabs-ai/claude";
+    ai-sandbox-opencode = "nolabs-ai/opencode";
   };
 
   # profile -> its single `extends` entry: its pack, or the ai-sandbox base of its pack.
@@ -298,6 +299,7 @@
     aiPack
     // {
       claude-local = "ai-sandbox-claude";
+      opencode-claude = "ai-sandbox-opencode";
     };
 
   # IFD-free: this requires the profiles stay `.text = builtins.toJSON ...`.

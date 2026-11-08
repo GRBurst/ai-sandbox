@@ -1,0 +1,151 @@
+{
+  "allow_launch_services": true,
+  "environment": {
+    "set_vars": {
+      "CLAUDE_CONFIG_DIR": "$HOME/.local/share/opencode/claude"
+    }
+  },
+  "extends": [
+    "default"
+  ],
+  "filesystem": {
+    "allow": [
+      "$HOME/.opencode",
+      "$HOME/.config/opencode",
+      "$HOME/.cache/opencode",
+      "$HOME/.local/share/opencode",
+      "$HOME/.local/share/opentui",
+      "$HOME/.local/state/opencode",
+      "$HOME/.npm",
+      "$NONO_CONFIG/profile-drafts",
+      "$TMPDIR"
+    ],
+    "bypass_protection": [
+      {
+        "path": "$HOME/Library/Keychains/login.keychain-db",
+        "when": "macos"
+      }
+    ],
+    "read": [
+      "$NONO_PACKAGES",
+      "$NONO_CONFIG/profiles",
+      "$HOME/.agents"
+    ],
+    "read_file": [
+      {
+        "path": "$HOME/Library/Keychains/login.keychain-db",
+        "when": "macos"
+      }
+    ],
+    "suppress_save_prompt": [
+      "$NONO_PACKAGES/nolabs-ai/opencode"
+    ]
+  },
+  "groups": {
+    "include": [
+      "node_runtime",
+      "rust_runtime",
+      "python_runtime",
+      {
+        "name": "user_caches_macos",
+        "when": "macos"
+      },
+      {
+        "name": "user_caches_linux",
+        "when": "linux"
+      },
+      {
+        "name": "linux_sysfs_read",
+        "when": "linux"
+      },
+      "nix_runtime",
+      "git_config",
+      "unlink_protection",
+      {
+        "name": "opencode_linux",
+        "when": "linux"
+      }
+    ]
+  },
+  "meta": {
+    "description": "Modified by ai-sandbox from the nolabs-ai/opencode 0.1.3 profile (Apache-2.0): no ~/.claude or ~/.codex grants, a Claude Code config dir of its own; see modules/home-manager/vendor/README.md",
+    "name": "ai-sandbox-opencode"
+  },
+  "network": {
+    "allow_domain": [],
+    "block": false,
+    "credentials": [],
+    "custom_credentials": {
+      "anthropic": {
+        "credential_format": "{}",
+        "credential_key": "ANTHROPIC_API_KEY",
+        "env_var": "ANTHROPIC_API_KEY",
+        "inject_header": "x-api-key",
+        "upstream": "https://api.anthropic.com"
+      },
+      "gemini": {
+        "credential_format": "{}",
+        "credential_key": "GOOGLE_API_KEY",
+        "env_var": "GEMINI_API_KEY",
+        "inject_header": "x-goog-api-key",
+        "upstream": "https://generativelanguage.googleapis.com"
+      },
+      "github": {
+        "credential_format": "token {}",
+        "credential_key": "GITHUB_TOKEN",
+        "env_var": "GITHUB_TOKEN",
+        "inject_header": "Authorization",
+        "upstream": "https://api.github.com"
+      },
+      "gitlab": {
+        "credential_format": "Bearer {}",
+        "credential_key": "GITLAB_TOKEN",
+        "env_var": "GITLAB_TOKEN",
+        "inject_header": "Authorization",
+        "upstream": "https://gitlab.com/api"
+      },
+      "openai": {
+        "credential_format": "Bearer {}",
+        "credential_key": "OPENAI_API_KEY",
+        "env_var": "OPENAI_API_KEY",
+        "inject_header": "Authorization",
+        "upstream": "https://api.openai.com/v1"
+      }
+    },
+    "listen_port": [],
+    "open_port": []
+  },
+  "open_urls": {
+    "allow_localhost": true,
+    "allow_origins": [
+      "https://auth.openai.com",
+      "https://claude.ai",
+      "https://github.com"
+    ]
+  },
+  "rollback": {
+    "exclude_globs": [
+      "*.tmp.[0-9]*.[0-9]*"
+    ],
+    "exclude_patterns": [
+      "node_modules",
+      ".next",
+      "__pycache__",
+      "target",
+      ".opencode"
+    ]
+  },
+  "security": {
+    "capability_elevation": false,
+    "signal_mode": "isolated"
+  },
+  "session_hooks": {
+    "before": {
+      "script": "$NONO_PACKAGES/nolabs-ai/opencode/bin/ensure-dirs.sh",
+      "timeout_secs": 10
+    }
+  },
+  "workdir": {
+    "access": "readwrite"
+  }
+}

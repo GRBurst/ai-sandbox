@@ -11,16 +11,14 @@
     }
   },
   "extends": [
-    "nolabs-ai/opencode"
+    "ai-sandbox-opencode"
   ],
   "filesystem": {
     "allow": [
       "$TMPDIR",
       "$XDG_CACHE_HOME/opencode"
     ],
-    "allow_file": [
-      "$HOME/.claude/.credentials.json"
-    ],
+    "allow_file": [],
     "deny": [],
     "read": [
       "$HOME/.agents/skills"

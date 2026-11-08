@@ -146,8 +146,8 @@ declare -a layer_names=()   # the registered layers, in registration order
 declare -A layer_dirs=()    # layer name -> directory
 declare -A profile_src=()   # profile file name -> the file copied to profile_dir
 declare -a cache_dirs=()    # the directories of install/dirs, resolved
-declare -a home_lines=()    # the lines of install/dirs below @HOME@ (the bases' dirs)
-declare -a base_dirs=()     # those resolved, when a base is installed
+declare -a home_lines=()    # the lines of install/dirs below @HOME@ (a base's dir, then the base)
+declare -a base_dirs=()     # those resolved, when their base is installed
 declare -a services=()      # the services of SERVICES
 declare -a service_profiles=() # their profiles
 declare -a service_units=() # their unit files, for systemctl
@@ -927,12 +927,13 @@ resolve() {
 }
 
 # load_dirs: the directories of install/dirs (the per-command cache dirs, the
-# sandboxed Claude Code's config dir) with the placeholders resolved, checked
-# before anything is written. The cache dirs are made whatever HARNESSES
-# selects; the lines below @HOME@ are the shipped bases' dirs, which
-# add_base_dirs takes once install_bases knows whether a base is installed.
+# bases' config dirs) with the placeholders resolved, checked before anything
+# is written. The cache dirs are made whatever HARNESSES selects; a line below
+# @HOME@ is a shipped base's dir followed by that base (install/bases.json),
+# which add_base_dirs takes once install_bases knows whether the base is
+# installed.
 load_dirs() {
-  local line d n=0
+  local line d b extra n=0
   plain_dir "$cache_home" ||
     die "XDG_CACHE_HOME must be an absolute path of letters, digits and . _ + @ - (no . or .. segment): $cache_home"
   while IFS= read -r line || [ -n "$line" ]; do
@@ -940,6 +941,9 @@ load_dirs() {
     [ -n "$line" ] || continue
     case $line in
       @HOME@/*)
+        read -r d b extra <<<"$line"
+        { [ -n "$b" ] && [ -z "$extra" ] && [ -n "${base_pack[$b]+x}" ]; } ||
+          die "install/dirs:$n: a directory below @HOME@ must be followed by its base of install/bases.json: $line"
         home_lines+=("$line")
         continue
         ;;
@@ -950,15 +954,13 @@ load_dirs() {
   done <"$root/install/dirs"
 }
 
-# add_base_dirs: the @HOME@ lines of install/dirs, made (and a plain HOME
-# required) only when a shipped base is installed; run after install_bases.
+# add_base_dirs: the @HOME@ lines of install/dirs, each made (and a plain HOME
+# required) only when its base is installed; run after install_bases.
 add_base_dirs() {
-  local b line d installed=0
-  for b in "${!base_pack[@]}"; do
-    if [ -n "${profile_src[$b.json]+x}" ]; then installed=1; fi
-  done
-  [ "$installed" = 1 ] || return 0
+  local b line d
   for line in "${home_lines[@]}"; do
+    read -r line b <<<"$line"
+    [ -n "${profile_src[$b.json]+x}" ] || continue
     plain_dir "$HOME" ||
       die "HOME must be an absolute path of letters, digits and . _ + @ - (no . or .. segment) for the directory $line of install/dirs: $HOME"
     d=$(resolve "$line")

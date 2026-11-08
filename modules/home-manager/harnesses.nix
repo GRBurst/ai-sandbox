@@ -46,13 +46,12 @@
       pack = "nolabs-ai/claude";
       exclude = ["vscode_linux"];
     };
-    # Reads Claude Code's OAuth credentials, refreshes them and writes the rotated refresh
-    # token back: rw on that one file, not on the whole ~/.claude directory.
+    # Reaches Claude through Claude Code's credentials in a config dir of opencode's own,
+    # which its base (./bases.nix) sets and grants; nothing under ~/.claude.
     opencode = {
       profileName = "opencode-claude";
       pack = "nolabs-ai/opencode";
       exclude = ["user_caches_linux"];
-      allowFile = ["$HOME/.claude/.credentials.json"];
       readsSharedSkills = true;
     };
     pi = {

@@ -208,7 +208,16 @@
       })
       a.serviceUnits;
   };
-  installDirs = lib.concatMapStrings (d: subst d + "\n") a.internal.activationDirs;
+  # A base's dir is followed by the base's name: the installer makes it only with that base.
+  bases = import ../modules/home-manager/bases.nix {inherit lib;};
+  baseOfDir = lib.listToAttrs (lib.concatLists (lib.mapAttrsToList (b: pack:
+    map (d: lib.nameValuePair (subst ("/@HOME@" + lib.removePrefix "$HOME" d)) b) bases.${pack}.dirs)
+  a.internal.baseProfiles));
+  installDirs = lib.concatMapStrings (d: let
+    s = subst d;
+  in
+    s + lib.optionalString (baseOfDir ? ${s}) " ${baseOfDir.${s}}" + "\n")
+  a.internal.activationDirs;
 
   tree =
     pkgs.runCommand "ai-sandbox-render" {nativeBuildInputs = [pkgs.jq pkgs.gnugrep];}
