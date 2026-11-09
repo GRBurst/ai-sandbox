@@ -4,10 +4,30 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }: let
   scfg = config.programs.aiSandbox;
   isolationEnabled = scfg.enable && scfg.isolation.enable;
+
+  # `harnesses.<name>.preStart`, per enabled harness with a non-blank hook: a file in the store,
+  # so the alias names it by a path of shell-safe characters and the hook text needs no quoting
+  # in any shell the alias reaches. `dash -n` at build time: a syntax error in a sourced file
+  # ends a POSIX shell, so it would stop the harness at every start rather than once here.
+  preStartFiles = lib.mapAttrs (_: h:
+    pkgs.writeTextFile {
+      name = "ai-sandbox-pre-start";
+      text = h.preStart;
+      checkPhase = "${pkgs.dash}/bin/dash -n \"$target\"";
+    })
+  (lib.filterAttrs (c: h: h.enable && builtins.match "[ \t\n\r]*" h.preStart == null) scfg.harnesses);
+
+  # The segment between the mkdir and the exec: the hook sourced in the alias's own `sh`, so its
+  # exports reach the exec'd command; stdin from /dev/null (a piped prompt is the harness's),
+  # stdout to stderr (the harness's stdout stays its own), `|| :` so a failing last command
+  # does not stop the harness. After the mkdir: the hook may use the alias's TMPDIR.
+  preStartSegment = command:
+    lib.optional (preStartFiles ? ${command}) "{ . ${preStartFiles.${command}} || :; } </dev/null >&2 &&";
 
   # A SHELL EXPRESSION, not a path: expanded by the interactive shell when the
   # alias runs, so a project that exports its own TMPDIR wins and the harness
@@ -73,16 +93,22 @@
   #
   # `wrapper` is the argv between `exec` and `nono`. mkNonoAlias passes none:
   # that is the nono-only string, which `<alias>_nono` must equal.
+  #
+  # `preStart` is the hook segment (preStartSegment), [] for none: the generated aliases pass
+  # their harness's, render.command none.
   mkNonoAliasWith = wrapper: {
     command,
     profile,
     extraArgs ? [],
     tmpLeaf ? command,
+    preStart ? [],
   }: let
     tmpdir = sandboxTmpdirExpr tmpLeaf;
     inner =
       lib.concatStringsSep " "
-      (["mkdir" "-p" "-m" "700" "\"$TMPDIR\"" "&&" "exec"]
+      (["mkdir" "-p" "-m" "700" "\"$TMPDIR\"" "&&"]
+        ++ preStart
+        ++ ["exec"]
         ++ wrapper
         ++ ["nono" "run" "--profile" profile]
         ++ scfg.nonoArgs
@@ -124,6 +150,7 @@
     mkAlias {
       alias = command;
       inherit command profile;
+      preStart = preStartSegment command;
     })
   scfg.harnessProfiles;
 
@@ -138,6 +165,7 @@
         then alias
         else null;
       inherit (e) command profile;
+      preStart = preStartSegment e.command;
       extraArgs = e.spec.nonoArgs;
       x11 = e.spec.x11;
       gitDirs = e.spec.gitDirs;
@@ -150,11 +178,15 @@
   # with gitDirs: nono alone would leave those git dirs' hooks and config writable.
   nonoAliases =
     lib.mapAttrs' (command: profile:
-      lib.nameValuePair "${command}_nono" (mkNonoAlias {inherit command profile;}))
+      lib.nameValuePair "${command}_nono" (mkNonoAlias {
+        inherit command profile;
+        preStart = preStartSegment command;
+      }))
     scfg.harnessProfiles
     // lib.mapAttrs' (alias: e:
       lib.nameValuePair "${alias}_nono" (mkNonoAlias {
         inherit (e) command profile;
+        preStart = preStartSegment e.command;
         extraArgs = e.spec.nonoArgs;
       }))
     (lib.filterAttrs (_: e: e.spec.gitDirs == []) scfg.internal.variants);
@@ -168,6 +200,13 @@
   fallbackSegments = lib.filter (s: s != "" && s != ".") (lib.splitString "/" scfg.tmpdirFallback);
   fallbackPath = "/" + lib.concatStringsSep "/" fallbackSegments;
 in {
+  options.programs.aiSandbox.internal.preStartFiles = lib.mkOption {
+    type = with lib.types; attrsOf package;
+    internal = true;
+    readOnly = true;
+    description = "Command of every enabled harness with a non-blank `preStart` mapped to the store file its aliases source.";
+  };
+
   options.programs.aiSandbox.render.command = lib.mkOption {
     type = with lib.types; functionTo str;
     readOnly = true;
@@ -181,9 +220,13 @@ in {
   };
 
   config = {
+    programs.aiSandbox.internal.preStartFiles = preStartFiles;
+
     programs.aiSandbox.render.command = a:
       if (a.gitDirs or []) != [] && !(isolationEnabled && lib.elem "git" scfg.isolation.layers)
       then throw "ai-sandbox: render.command got gitDirs, which only the namespace isolation's git layer holds read-only; turn on isolation.enable with \"git\" in isolation.layers, or drop gitDirs."
+      else if a ? preStart
+      then throw "ai-sandbox: render.command takes no preStart; a harness's hook (harnesses.<name>.preStart) is for its generated aliases only."
       else mkAlias a;
 
     assertions = [

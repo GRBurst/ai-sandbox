@@ -163,16 +163,36 @@
   #
   # `wrap` is the argv between `exec` and `nono`: the ai-sandbox-run prefix of
   # the namespace isolation, or [] for the nono-only string.
+  #
+  # A harness with a pre-start hook (`harnesses.<command>.preStart`) has its segment
+  # (aiPreStartSegment) between the mkdir and the exec.
   aiAliasString = wrap: extra: h: command: profile: let
     inner =
       lib.concatStringsSep " "
-      (["mkdir" "-p" "-m" "700" "\"$TMPDIR\"" "&&" "exec"]
+      (["mkdir" "-p" "-m" "700" "\"$TMPDIR\"" "&&"]
+        ++ lib.optional (aiPreStartSegment h command != "") (lib.removeSuffix " " (aiPreStartSegment h command))
+        ++ ["exec"]
         ++ wrap
         ++ ["nono" "run" "--profile" profile]
         ++ aiExpectedArgs h
         ++ extra
         ++ ["--" command "\"$@\""]);
   in "TMPDIR=\"${aiTmpdirExpr command}\" sh -c '${inner}' ${command}";
+
+  # The pre-start hook segment of the aliases of harness `command` ("" for none): the store file
+  # sourced with stdin from /dev/null and stdout to stderr, its failure ignored.
+  aiPreStartSegment = h: command: let
+    f = h.programs.aiSandbox.internal.preStartFiles.${command} or null;
+  in
+    if f == null
+    then ""
+    else "{ . ${f} || :; } </dev/null >&2 && ";
+
+  # An alias string without any hook segment of `h`: the shape rows hold for the rest.
+  aiWithoutPreStart = h: a: let
+    segs = map (c: aiPreStartSegment h c) (lib.attrNames h.programs.aiSandbox.internal.preStartFiles);
+  in
+    builtins.replaceStrings segs (map (_: "") segs) a;
 
   # The wrapper argv an alias puts in front of nono. `--nono-alias` names the
   # nono-only twin for the fail-closed hint; `--open-urls-profile`

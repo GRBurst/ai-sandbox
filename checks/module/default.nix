@@ -201,6 +201,8 @@ in {
 
   bases = import ./bases.nix {inherit lib helpers;};
 
+  inherit (import ./prestart.nix {inherit lib pkgs helpers;}) prestart prestart-run;
+
   # The sandbox module alone: the profile files, the exact emitted set, the
   # reclaim of the files nono rewrites, and the off switch.
   profiles = let

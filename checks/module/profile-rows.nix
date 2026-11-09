@@ -25,6 +25,7 @@
     aiEveryAliasOf
     aiAllAliasesOf
     aiNonoTwinsOf
+    aiWithoutPreStart
     ;
 in
   {
@@ -162,7 +163,7 @@ in
         condition =
           lib.all
           (a:
-            lib.hasInfix "sh -c 'mkdir -p -m 700 \"$TMPDIR\" && exec ai-sandbox-run " a
+            lib.hasInfix "sh -c 'mkdir -p -m 700 \"$TMPDIR\" && exec ai-sandbox-run " (aiWithoutPreStart home a)
             && lib.hasInfix " -- nono run --profile " a
             && lib.hasInfix "\"$@\"" a
             && !(lib.hasPrefix "mkdir" a))
@@ -175,7 +176,7 @@ in
         condition =
           lib.all
           (a:
-            lib.hasInfix "sh -c 'mkdir -p -m 700 \"$TMPDIR\" && exec nono run" a
+            lib.hasInfix "sh -c 'mkdir -p -m 700 \"$TMPDIR\" && exec nono run" (aiWithoutPreStart home a)
             && lib.hasInfix "\"$@\"" a
             && !(lib.hasPrefix "mkdir" a))
           (aiNonoTwinsOf home);

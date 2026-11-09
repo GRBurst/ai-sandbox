@@ -27,6 +27,36 @@
           default = null;
           description = "The harness's CLI, appended to `home.packages` while the harness and the module (`programs.aiSandbox.enable`) are enabled; `null` installs nothing (the CLI comes from elsewhere). The aliases run the bare command `<name>` from `PATH`, so the package must provide `bin/<name>`.";
         };
+        preStart = lib.mkOption {
+          type = lib.types.lines;
+          default = "";
+          example = lib.literalExpression ''
+            '''
+              ''${pkgs.my-service}/bin/my-service-up
+              export MY_SERVICE_URL=http://127.0.0.1:8080
+            '''
+          '';
+          description = ''
+            POSIX `sh` lines sourced by every generated alias of this harness (`<name>`, its
+            `_nono` twin, its variants and their twins; not `extraAliases` and not `render.command`)
+            OUTSIDE the sandbox, after the alias creates its TMPDIR and before it `exec`s the
+            sandboxed command. What they export reaches the harness. Stdin is `/dev/null` and
+            stdout goes to stderr, so a piped prompt and the harness's output stay intact. A
+            failing command does not stop the harness; `exit` does (the alias ends with that
+            status). Do not leave `set -e` on: whether it stops the harness depends on the shell
+            (`dash` aborts, `bash` as `sh` ignores it inside `|| :`). The lines run in the alias's
+            own shell: `cd` changes the harness's working directory (and its `--allow-cwd` grant),
+            and `set --` or `shift` clobbers the arguments; do not use them (a `( ... )` subshell
+            keeps a `cd` to itself, but exports nothing back). A background process started here
+            must detach stdin, stdout and stderr (`cmd >/dev/null 2>&1 </dev/null &`), or
+            `... 2>&1 | jq` waits for it. The lines are checked
+            with `dash -n` at build time; TMPDIR is the harness's own (writable by the sandbox), so
+            a long-lived process started here should get a TMPDIR of its own. To run a script
+            rather than lines, write `. ''${script}` (sourced: its exports reach the harness) or
+            `''${script}` (a child process: they do not). Empty or blank: no hook, the aliases are
+            unchanged. Nix only: the files rendered for use without Nix carry no hook.
+          '';
+        };
       };
   };
 

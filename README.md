@@ -22,7 +22,7 @@ from them (`profiles/`, `shell/`, `sysctl/`, `services/`, `services-nono/`,
   `shellcheck`, `actionlint`, `run-portable`, `install-sh`, `readme-deps`, `doc-refs`,
   `boundary`, `nixos-output`, `render-profiles`, `render-aliases`, `render-units`, `render-sysctl`, `render-install`, `variant-sh`, `extends-shape`, `packs-pins`, `packs-activation`, `vendored-packs`, `claude-why`, `opencode-why`, `existing-flake-example`;
   the module checks (`checks/module`) `fixtures`, `isolation`, `profiles`, `aliases`,
-  `home`, `services`, `variants`, `harnesses`, `profile-unit`, `bases`, `nixos`.
+  `home`, `services`, `variants`, `harnesses`, `profile-unit`, `bases`, `prestart`, `prestart-run`, `nixos`.
 - `apps.<system>.render`: `nix run .#render` from the checkout writes the generated files for use
   without Nix (`profiles/`, `shell/aliases.d/`, ...) from this module; the `render-*` checks compare them with its output.
 - `legacyPackages.<system>.render-tree`: that output as a store path.
@@ -141,6 +141,34 @@ programs.aiSandbox.variants.pi_notes = {
 
 This gives the profile `pi-claude-notes` and the aliases `pi_notes` and
 `pi_notes_nono`.
+
+A harness can run shell lines before it starts, outside the sandbox, from every
+alias of that harness (`pi`, `pi_nono`, `pi_notes`, `pi_notes_nono`, ...), for
+example to start a local service and hand its address to the agent:
+
+```nix
+programs.aiSandbox.harnesses.pi.preStart = ''
+  my-service-up
+  export MY_SERVICE_URL=http://127.0.0.1:8080
+'';
+```
+
+The lines are POSIX `sh`, written to a file in the store (checked with `dash -n`
+at build time) that the alias sources after it creates its `TMPDIR` and before
+it `exec`s the sandbox, so what they export reaches the harness. They read
+`/dev/null` and their output goes to stderr, so `echo prompt | pi -p | jq` keeps
+working; a failing command does not stop the harness, but `exit` does. Do not
+leave `set -e` on: whether it stops the harness depends on the shell (`dash`
+aborts, `bash` as `sh` ignores it inside `|| :`). The lines run in the alias's own
+shell, so `cd` changes the harness's working directory (and its `--allow-cwd`
+grant), and `set --` or `shift` clobbers the arguments: do not use them (a
+`( ... )` subshell keeps a `cd` to itself, but exports nothing back). A background
+process the hook starts must detach stdin, stdout and stderr (`cmd >/dev/null 2>&1 </dev/null &`), or `... 2>&1 | jq`
+waits for it. To run a script, source it (`. ${script}`; its exports reach the
+harness) or call it (`${script}`; they do not). The hook runs with the harness's `TMPDIR`, which the sandbox can write: give
+a long-lived process it starts a `TMPDIR` of its own. `extraAliases` entries and `render.command` carry no hook,
+and the files rendered for use without Nix carry none either. Without a hook the
+aliases are unchanged.
 
 `examples/existing-flake/` is this as a complete flake (an existing Home Manager
 flake with the module added); the check `existing-flake-example` evaluates it.
@@ -372,6 +400,8 @@ What you do not get without Nix:
   above, instead of a pinned closure.
 - The sysctl file is installed by hand (see the printed lines).
 - bash and zsh only (fish aliases need Home Manager).
+- No pre-start hooks (`harnesses.<name>.preStart`): run the command before the
+  alias yourself, or write your own alias around it.
 
 ## Options
 
@@ -404,6 +434,7 @@ the Home Manager module's.
 | `harnesses.<name>.include` | `[ ]` | `groups.include` for packs whose own group list is incomplete on NixOS. |
 | `harnesses.<name>.pack` | — | The nono registry pack the profile extends (its single `extends` entry); the presets set it; `nolabs-ai/claude` and `nolabs-ai/opencode` are re-based as `ai-sandbox-claude` and `ai-sandbox-opencode`, which the profile extends instead. |
 | `harnesses.<name>.package` | `null` | The harness's CLI, installed while the harness and the module are on; must provide `bin/<name>`. `null` installs nothing. |
+| `harnesses.<name>.preStart` | `""` | POSIX `sh` lines every alias of the harness (`_nono` twin and variants included; not `extraAliases`) sources outside the sandbox before it starts; exports reach the harness, failures do not stop it, `exit` does. Nix only. |
 | `harnesses.<name>.profileName` | — | Name of the generated nono profile; the presets set it. |
 | `harnesses.<name>.read` | `[ ]` | Read-only paths. |
 | `harnesses.<name>.readFile` | `[ ]` | Read-only single files. |
